@@ -129,7 +129,7 @@ def test_simple_training():
 
     # Create environment and agent
     env = PendulumEnv(num_envs=1)
-    config = SACConfig(hidden_dims=(32,))
+    config = SACConfig(hidden_dims=(8,))
     sac = SAC(obs_dim=3, action_dim=1, max_action=2.0, config=config)
 
     # Initialize

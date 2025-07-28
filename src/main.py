@@ -8,23 +8,29 @@ import jax.numpy as jnp
 import numpy as np
 from typing import Tuple
 import time
+import chex
 
 # Import our modules
-from environment import PendulumEnv, PendulumState
-from networks import ActorNetwork, DoubleCriticNetwork
-from algorithms import ReplayBuffer, SAC, SACConfig, Transition
-from utils import PendulumVisualizer, TrainingVisualizer
+from environment.pendulum import PendulumEnv
+from algorithms.replay_buffer import ReplayBuffer
+from algorithms.sac import SAC, SACConfig, SACState, Transition
+from utils.visualization import PendulumVisualizer, TrainingVisualizer
 
 
 def create_transition(
-    obs: jnp.ndarray, action: jnp.ndarray, reward: jnp.ndarray, next_obs: jnp.ndarray, done: jnp.ndarray
+    obs: chex.Array, action: chex.Array, reward: chex.Array, next_obs: chex.Array, done: chex.Array
 ) -> Transition:
     """Helper function to create a Transition."""
     return Transition(obs=obs, action=action, reward=reward, next_obs=next_obs, done=done)
 
 
 def run_episode(
-    env: PendulumEnv, sac: SAC, sac_state, key: jax.random.PRNGKey, max_steps: int = 200, deterministic: bool = False
+    env: PendulumEnv,
+    sac: SAC,
+    sac_state: SACState,
+    key: jax.random.PRNGKey,
+    max_steps: int = 200,
+    deterministic: bool = False,
 ) -> Tuple[float, int]:
     """Run a single episode and return total reward and steps."""
     key, reset_key = jax.random.split(key)
@@ -61,7 +67,7 @@ def main():
     print('=' * 50)
 
     # Configuration
-    config = SACConfig(learning_rate=3e-4, gamma=0.99, tau=0.005, alpha=0.2, auto_alpha=True, hidden_dims=(256, 256))
+    config = SACConfig(learning_rate=3e-4, gamma=0.99, tau=0.005, alpha=0.2, auto_alpha=True, hidden_dims=(8, 8))
 
     # Environment parameters
     num_envs = 4  # Start with small number for Phase 1

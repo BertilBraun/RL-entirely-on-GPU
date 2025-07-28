@@ -2,10 +2,10 @@
 Critic network implementation using Flax.
 """
 
+import chex
 import jax.numpy as jnp
 import flax.linen as nn
 from typing import Tuple
-import chex
 
 
 class CriticNetwork(nn.Module):
@@ -13,7 +13,7 @@ class CriticNetwork(nn.Module):
     Critic network that estimates Q-values from state-action pairs.
     """
 
-    hidden_dims: Tuple[int, ...] = (256, 256)
+    hidden_dims: Tuple[int, ...]
 
     @nn.compact
     def __call__(self, obs: chex.Array, action: chex.Array, training: bool = True) -> chex.Array:
@@ -47,7 +47,7 @@ class DoubleCriticNetwork(nn.Module):
     Double critic network (Q1 and Q2) for SAC.
     """
 
-    hidden_dims: Tuple[int, ...] = (256, 256)
+    hidden_dims: Tuple[int, ...]
 
     def setup(self):
         """Initialize two critic networks."""
@@ -78,24 +78,3 @@ class DoubleCriticNetwork(nn.Module):
     def critic2_forward(self, obs: chex.Array, action: chex.Array, training: bool = True) -> chex.Array:
         """Forward pass of only the second critic."""
         return self.critic2(obs, action, training=training)
-
-
-def create_critic_network(
-    obs_dim: int = 3, action_dim: int = 1, hidden_dims: Tuple[int, ...] = (256, 256), double: bool = True
-) -> nn.Module:
-    """
-    Factory function to create critic network.
-
-    Args:
-        obs_dim: Observation dimension
-        action_dim: Action dimension
-        hidden_dims: Hidden layer dimensions
-        double: Whether to use double critic
-
-    Returns:
-        Critic network instance
-    """
-    if double:
-        return DoubleCriticNetwork(hidden_dims=hidden_dims)
-    else:
-        return CriticNetwork(hidden_dims=hidden_dims)

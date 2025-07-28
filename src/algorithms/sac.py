@@ -4,14 +4,13 @@ Soft Actor-Critic (SAC) algorithm implementation using JAX.
 
 import jax
 import jax.numpy as jnp
-import optax
-import flax.linen as nn
-from typing import NamedTuple, Tuple, Any
 import chex
+import optax
+from typing import NamedTuple, Tuple
 
-from ..networks.actor import ActorNetwork
-from ..networks.critic import DoubleCriticNetwork
-from .replay_buffer import Transition
+from networks.actor import ActorNetwork
+from networks.critic import DoubleCriticNetwork
+from algorithms.replay_buffer import Transition
 
 
 class SACConfig(NamedTuple):
@@ -23,7 +22,7 @@ class SACConfig(NamedTuple):
     alpha: float = 0.2
     target_entropy: float | None = None
     auto_alpha: bool = True
-    hidden_dims: Tuple[int, ...] = (32,)
+    hidden_dims: Tuple[int, ...] = (8,)
 
 
 class SACState(NamedTuple):
@@ -37,7 +36,7 @@ class SACState(NamedTuple):
 
     actor_opt_state: chex.ArrayTree
     critic_opt_state: chex.ArrayTree
-    alpha_opt_state: chex.ArrayTree
+    alpha_opt_state: chex.ArrayTree | None = None
 
 
 class SAC:
@@ -45,7 +44,7 @@ class SAC:
     Soft Actor-Critic algorithm implementation.
     """
 
-    def __init__(self, obs_dim: int = 3, action_dim: int = 1, max_action: float = 2.0, config: SACConfig = SACConfig()):
+    def __init__(self, obs_dim: int, action_dim: int, max_action: float, config: SACConfig = SACConfig()):
         self.obs_dim = obs_dim
         self.action_dim = action_dim
         self.max_action = max_action
@@ -195,9 +194,10 @@ class SAC:
         key_critic, key_actor, key_alpha = jax.random.split(key, 3)
 
         # Update critic
-        critic_loss_fn = lambda params: self.critic_loss_fn(
-            params, state.target_critic_params, state.actor_params, batch, state.alpha, key_critic
-        )
+        def critic_loss_fn(params: chex.ArrayTree) -> Tuple[chex.Array, dict]:
+            return self.critic_loss_fn(
+                params, state.target_critic_params, state.actor_params, batch, state.alpha, key_critic
+            )
 
         (critic_loss, critic_info), critic_grads = jax.value_and_grad(critic_loss_fn, has_aux=True)(state.critic_params)
 
@@ -205,7 +205,8 @@ class SAC:
         new_critic_params = optax.apply_updates(state.critic_params, critic_updates)
 
         # Update actor
-        actor_loss_fn = lambda params: self.actor_loss_fn(params, new_critic_params, batch, state.alpha, key_actor)
+        def actor_loss_fn(params: chex.ArrayTree) -> Tuple[chex.Array, dict]:
+            return self.actor_loss_fn(params, new_critic_params, batch, state.alpha, key_actor)
 
         (actor_loss, actor_info), actor_grads = jax.value_and_grad(actor_loss_fn, has_aux=True)(state.actor_params)
 
@@ -222,7 +223,8 @@ class SAC:
             # Get log probs for alpha update
             _, log_probs = self.actor.sample_action(new_actor_params, batch.obs, key_alpha)
 
-            alpha_loss_fn = lambda log_alpha: self.alpha_loss_fn(log_alpha, log_probs)
+            def alpha_loss_fn(log_alpha: chex.Array) -> Tuple[chex.Array, dict]:
+                return self.alpha_loss_fn(log_alpha, log_probs)
 
             (alpha_loss, alpha_info), alpha_grads = jax.value_and_grad(alpha_loss_fn, has_aux=True)(state.log_alpha)
 

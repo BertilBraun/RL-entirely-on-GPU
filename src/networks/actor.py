@@ -15,9 +15,9 @@ class ActorNetwork(nn.Module):
     Uses tanh + reparameterization trick for continuous control.
     """
 
-    hidden_dims: Tuple[int, ...] = (32,)
-    action_dim: int = 1
-    max_action: float = 2.0  # Max torque
+    hidden_dims: Tuple[int, ...]
+    action_dim: int
+    max_action: float
     log_std_min: float = -20.0
     log_std_max: float = 2.0
 
@@ -114,21 +114,3 @@ class ActorNetwork(nn.Module):
         """
         mu, _ = self.apply(params, obs, training=training)
         return jnp.tanh(mu) * self.max_action
-
-
-def create_actor_network(
-    obs_dim: int = 3, action_dim: int = 1, hidden_dims: Tuple[int, ...] = (256, 256), max_action: float = 2.0
-) -> ActorNetwork:
-    """
-    Factory function to create actor network.
-
-    Args:
-        obs_dim: Observation dimension
-        action_dim: Action dimension
-        hidden_dims: Hidden layer dimensions
-        max_action: Maximum action value
-
-    Returns:
-        ActorNetwork instance
-    """
-    return ActorNetwork(hidden_dims=hidden_dims, action_dim=action_dim, max_action=max_action)

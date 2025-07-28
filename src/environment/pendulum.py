@@ -14,7 +14,7 @@ DEFAULT_PARAMS = {
     'g': 9.81,
     'l': 1.0,
     'm': 1.0,
-    'damping': 0.1,  # Added damping coefficient
+    'damping': 0.99,
     'max_speed': 8.0,
     'max_torque': 2.0,
 }
@@ -54,11 +54,11 @@ def pendulum_step(
     Returns:
         Tuple of (next_theta, next_theta_dot)
     """
-    # Pendulum dynamics with damping: theta_ddot = (g/l) * sin(theta) + torque / (m * l^2) - damping * theta_dot
-    theta_ddot = (g / l) * jnp.sin(theta) + torque / (m * l**2) - damping * theta_dot
+    # Pendulum dynamics with damping: theta_ddot = (g/l) * sin(theta) + torque / (m * l^2)
+    theta_ddot = (g / l) * jnp.sin(theta) + torque / (m * l**2)
 
     # Forward Euler integration
-    theta_dot_new = theta_dot + dt * theta_ddot
+    theta_dot_new = theta_dot + dt * theta_ddot * damping
     theta_new = theta + dt * theta_dot_new
 
     # Wrap angle to [-π, π]
