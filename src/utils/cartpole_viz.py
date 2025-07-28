@@ -8,7 +8,6 @@ from typing import Tuple
 class EpisodeInfo:
     episode: int
     step: int
-    reward: float
 
 
 @dataclass
@@ -76,7 +75,7 @@ class CartPoleLiveVisualizer:
         self.font = pygame.font.Font(pygame.font.get_default_font(), 24)
 
         # Episode info
-        self.episode_info = EpisodeInfo(episode=0, step=0, reward=0.0)
+        self.episode_info = EpisodeInfo(episode=0, step=0)
 
     def world_to_screen(self, x: float, y: float) -> Tuple[int, int]:
         """Convert world coordinates to screen coordinates."""
@@ -84,7 +83,7 @@ class CartPoleLiveVisualizer:
         screen_y = int(self.center_y - y * self.scale)  # Flip Y axis
         return screen_x, screen_y
 
-    def update(self, states: np.ndarray, episode: int, step: int, reward: float) -> None:
+    def update(self, states: np.ndarray, episode: int, step: int, rewards: np.ndarray) -> None:
         """
         Update the visualization with new cart-pole states.
 
@@ -103,7 +102,6 @@ class CartPoleLiveVisualizer:
         # Update episode info
         self.episode_info.episode = episode
         self.episode_info.step = step
-        self.episode_info.reward = reward
 
         # Clear screen
         self.screen.fill(Colors.background)
@@ -115,6 +113,7 @@ class CartPoleLiveVisualizer:
 
         # Limit to number of cartpoles we're visualizing
         states = states[: self.num_cartpoles]
+        rewards = rewards[: self.num_cartpoles]
 
         # Draw each cartpole
         for i, state in enumerate(states):
@@ -201,13 +200,20 @@ class CartPoleLiveVisualizer:
         info_texts = [
             f'Episode: {self.episode_info.episode}',
             f'Step: {self.episode_info.step}',
-            f'Reward: {self.episode_info.reward:.2f}',
         ]
 
         for text_str in info_texts:
             text = self.font.render(text_str, True, Colors.text)
             self.screen.blit(text, (10, info_y))
             info_y += 25
+
+        # draw the rewards underneath the cartpoles
+        for i, reward in enumerate(rewards):
+            reward_text = self.font.render(f'Reward: {float(reward):.2f}', True, Colors.text)
+            x, y = self.offsets[i]
+            x += self.center_x
+            y += self.center_y
+            self.screen.blit(reward_text, (x + 10, y + 10))
 
         # Update display
         pygame.display.flip()

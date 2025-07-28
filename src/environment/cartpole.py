@@ -93,6 +93,8 @@ def cartpole_step(
 
     # Constrain base position to rail limits
     x_new = jnp.clip(x_new, -DEFAULT_PARAMS['rail_limit'], DEFAULT_PARAMS['rail_limit'])
+    # if at the limit, set x_dot to 0
+    x_dot_new = jnp.where(jnp.abs(x_new) >= DEFAULT_PARAMS['rail_limit'], 0.0, x_dot_new)
 
     # Wrap angle to [-π, π]
     theta_new = jnp.mod(theta_new + jnp.pi, 2 * jnp.pi) - jnp.pi
@@ -146,7 +148,7 @@ def reward_fn(
     """
     # Calculate pendulum tip height (y-coordinate)
     # y = l * cos(theta) when theta=0 is vertical upward
-    y_tip = -length * jnp.cos(theta)
+    y_tip = length * jnp.cos(theta)
 
     return y_tip
 

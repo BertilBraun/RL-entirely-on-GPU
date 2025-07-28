@@ -1,5 +1,5 @@
 """
-Main script for Phase 1: JAX-based SAC for Cart-Pole Environment.
+Main script for JAX-based SAC for Cart-Pole Environment.
 Demonstrates CPU-compatible implementation with all JAX APIs.
 """
 
@@ -10,7 +10,6 @@ from typing import Tuple
 import time
 from tqdm import trange
 
-# Import our modules
 from environment.cartpole import CartPoleEnv
 from algorithms.replay_buffer import ReplayBuffer
 from algorithms.sac import SAC, SACConfig, SACState, Transition
@@ -55,20 +54,20 @@ def run_episode(
 
 
 def main():
-    """Main training loop for Phase 1 implementation."""
-    print('🚀 Starting JAX-based SAC for Cart-Pole - Phase 1')
+    """Main training loop."""
+    print('🚀 Starting JAX-based SAC for Cart-Pole')
     print('=' * 50)
 
     # Configuration
     config = SACConfig(learning_rate=3e-4, gamma=0.99, tau=0.005, alpha=0.2, auto_alpha=True, hidden_dims=(8, 8))
 
     # Environment parameters
-    num_envs = 4  # Start with small number for Phase 1
-    max_episode_steps = 50  # TODO increase
-    buffer_capacity = 100000
+    num_envs = 256
+    max_episode_steps = 250  # TODO increase
+    buffer_capacity = 10000
     batch_size = 256
-    num_episodes = 100
-    update_freq = 1  # must be between 0 and num_envs
+    num_episodes = 10
+    update_freq = num_envs  # must be between 0 and num_envs (the higher, the less frequent the updates)
     eval_freq = 1  # TODO increase
     live_visualization = True
 
@@ -139,11 +138,11 @@ def main():
                 # Store transitions for each environment
                 for env_idx in range(num_envs):
                     transition = Transition(
-                        obs=obs[env_idx],
-                        action=action[env_idx],
-                        reward=reward[env_idx],
-                        next_obs=next_obs[env_idx],
-                        done=done[env_idx],
+                        obs=obs[env_idx],  # type: ignore
+                        action=action[env_idx],  # type: ignore
+                        reward=reward[env_idx],  # type: ignore
+                        next_obs=next_obs[env_idx],  # type: ignore
+                        done=done[env_idx],  # type: ignore
                     )
                     # Add episode transitions to buffer
                     buffer_state = replay_buffer.add(buffer_state, transition)
@@ -151,7 +150,7 @@ def main():
                 # Update live visualization during training
                 if live_viz is not None:
                     # Update visualization with current observations
-                    live_viz.update(np.array(obs), episode=episode, step=step, reward=episode_reward)
+                    live_viz.update(np.array(obs), episode=episode, step=step, rewards=np.array(reward))
 
                 # Training updates
                 if replay_buffer.can_sample(buffer_state, batch_size):
@@ -237,8 +236,6 @@ def main():
     training_viz.close()
     if live_viz is not None:
         live_viz.close()
-
-    print('✅ Phase 1 implementation complete!')
 
 
 if __name__ == '__main__':
