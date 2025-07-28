@@ -23,7 +23,8 @@ DEFAULT_PARAMS = {
 }
 
 
-class CartPoleState(NamedTuple):
+@chex.dataclass
+class CartPoleState:
     """State representation for cart-pole environment."""
 
     x: chex.Array  # Base position
@@ -271,8 +272,4 @@ class CartPoleEnv:
         self, state: CartPoleState, action: chex.Array
     ) -> Tuple[chex.Array, chex.Array, chex.Array, CartPoleState]:
         """Step environment(s) forward."""
-        assert action.ndim == 2, 'Action must be a 2D array with shape (num_envs, action_dim)'
-        assert action.shape[0] == self.num_envs, 'Action must have num_envs rows'
-        assert action.shape[1] == self.action_dim, 'Action must have action_dim columns'
-
         return self.step_fn(state, action)

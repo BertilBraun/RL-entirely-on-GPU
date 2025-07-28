@@ -1,5 +1,5 @@
 """
-Main script for Phase 1: JAX-based SAC for Pendulum Environment.
+Main script for Phase 1: JAX-based SAC for Cart-Pole Environment.
 Demonstrates CPU-compatible implementation with all JAX APIs.
 """
 
@@ -8,19 +8,20 @@ import jax.numpy as jnp
 import numpy as np
 from typing import Tuple
 import time
+from tqdm import trange
 
 # Import our modules
 from environment.cartpole import CartPoleEnv
 from algorithms.replay_buffer import ReplayBuffer
 from algorithms.sac import SAC, SACConfig, SACState, Transition
-from utils.visualization import PendulumVisualizer, TrainingVisualizer
+from utils.visualization import CartPoleVisualizer, TrainingVisualizer
 
 
 def run_episode(
     env: CartPoleEnv,
     sac: SAC,
     sac_state: SACState,
-    key: jax.random.PRNGKey,
+    key: jax.Array,
     max_steps: int = 200,
     deterministic: bool = False,
 ) -> Tuple[float, int]:
@@ -38,15 +39,15 @@ def run_episode(
         # Take environment step
         next_obs, reward, done, next_env_state = env.step(env_state, action)
 
-        total_reward += float(reward)
+        total_reward += float(jnp.mean(reward))  # Average reward across environments
         steps += 1
 
         # Update for next iteration
         obs = next_obs
         env_state = next_env_state
 
-        # Check if episode should end (pendulum envs typically don't terminate)
-        if float(done):
+        # Check if episode should end (cart-pole envs typically don't terminate)
+        if float(jnp.any(done)):
             break
 
     return total_reward, steps
@@ -54,7 +55,7 @@ def run_episode(
 
 def main():
     """Main training loop for Phase 1 implementation."""
-    print('🚀 Starting JAX-based SAC for Pendulum - Phase 1')
+    print('🚀 Starting JAX-based SAC for Cart-Pole - Phase 1')
     print('=' * 50)
 
     # Configuration
@@ -62,7 +63,7 @@ def main():
 
     # Environment parameters
     num_envs = 4  # Start with small number for Phase 1
-    max_episode_steps = 200
+    max_episode_steps = 20  # TODO increase
     buffer_capacity = 100000
     batch_size = 256
     num_episodes = 100
@@ -90,10 +91,10 @@ def main():
     buffer_state = replay_buffer.init_buffer_state(buffer_key)
 
     # Create visualizers
-    pendulum_viz = PendulumVisualizer(num_pendulums=1, figsize=(6, 6))
+    cartpole_viz = CartPoleVisualizer(num_cartpoles=1, l=1.0, rail_limit=2.0, figsize=(8, 6))
     training_viz = TrainingVisualizer(figsize=(12, 6))
 
-    print(f'Environment: {num_envs} pendulum(s)')
+    print(f'Environment: {num_envs} cart-pole(s)')
     print(f'Network architecture: {config.hidden_dims}')
     print(f'Learning rate: {config.learning_rate}')
     print(f'Replay buffer capacity: {buffer_capacity}')
@@ -116,7 +117,12 @@ def main():
             episode_transitions = []
 
             # Collect episode data
-            for step in range(max_episode_steps):
+            import cProfile
+
+            profiler = cProfile.Profile()
+            profiler.enable()
+
+            for step in trange(max_episode_steps, desc=f'Episode {episode}'):
                 # Select action
                 key, action_key = jax.random.split(key)
                 action = sac.select_action(sac_state, obs, action_key, deterministic=False)
@@ -124,15 +130,31 @@ def main():
                 # Take environment step
                 next_obs, reward, done, next_env_state = env.step(env_state, action)
 
-                # Store transition
-                transition = Transition(obs=obs, action=action, reward=reward, next_obs=next_obs, done=done)
-                episode_transitions.append(transition)
+                # Store transitions for each environment
+                obs_np = np.array(obs)
+                next_obs_np = np.array(next_obs)
+                reward_np = np.array(reward)
+                done_np = np.array(done)
+                action_np = np.array(action)
 
-                episode_reward += float(reward)
+                for env_idx in range(num_envs):
+                    transition = Transition(
+                        obs=obs_np[env_idx],
+                        action=action_np[env_idx] if action_np.ndim > 0 else action_np,
+                        reward=reward_np[env_idx],
+                        next_obs=next_obs_np[env_idx],
+                        done=done_np[env_idx],
+                    )
+                    episode_transitions.append(transition)
+
+                episode_reward += float(jnp.mean(reward))
 
                 # Update for next step
                 obs = next_obs
                 env_state = next_env_state
+
+            profiler.disable()
+            profiler.print_stats(sort='tottime')
 
             # Add episode transitions to buffer
             for transition in episode_transitions:
@@ -173,18 +195,19 @@ def main():
                 if eval_reward > best_reward:
                     best_reward = eval_reward
 
-                # Update pendulum visualization with current policy
+                # Update cart-pole visualization with current policy
                 key, viz_key = jax.random.split(key)
                 obs, env_state = env.reset()
-                pendulum_viz.clear_trails()
+                cartpole_viz.clear_trails()
 
                 for _ in range(50):  # Show 50 steps of current policy
                     action = sac.select_action(sac_state, obs, viz_key, deterministic=True)
                     next_obs, _, _, next_env_state = env.step(env_state, action)
 
-                    # Update pendulum visualization
-                    theta = jnp.arctan2(obs[1], obs[0])  # Extract theta from [cos, sin, theta_dot]
-                    pendulum_viz.update_pendulums(jnp.array([theta]))
+                    # Update cart-pole visualization with first environment's state
+                    # obs format: [x, x_dot, cos(theta), sin(theta), theta_dot]
+                    obs_first = np.array(obs)[0:1]  # Use first environment
+                    cartpole_viz.update_cartpoles(obs_first)
 
                     obs = next_obs
                     env_state = next_env_state
@@ -227,10 +250,10 @@ def main():
     print('\n📊 Showing visualizations...')
     training_viz.update_plots()
     training_viz.show(block=False)
-    pendulum_viz.show(block=True)
+    cartpole_viz.show(block=True)
 
     # Cleanup
-    pendulum_viz.close()
+    cartpole_viz.close()
     training_viz.close()
 
     print('✅ Phase 1 implementation complete!')
