@@ -8,24 +8,16 @@ import jax.numpy as jnp
 import numpy as np
 from typing import Tuple
 import time
-import chex
 
 # Import our modules
-from environment.pendulum import PendulumEnv
+from environment.cartpole import CartPoleEnv
 from algorithms.replay_buffer import ReplayBuffer
 from algorithms.sac import SAC, SACConfig, SACState, Transition
 from utils.visualization import PendulumVisualizer, TrainingVisualizer
 
 
-def create_transition(
-    obs: chex.Array, action: chex.Array, reward: chex.Array, next_obs: chex.Array, done: chex.Array
-) -> Transition:
-    """Helper function to create a Transition."""
-    return Transition(obs=obs, action=action, reward=reward, next_obs=next_obs, done=done)
-
-
 def run_episode(
-    env: PendulumEnv,
+    env: CartPoleEnv,
     sac: SAC,
     sac_state: SACState,
     key: jax.random.PRNGKey,
@@ -33,8 +25,7 @@ def run_episode(
     deterministic: bool = False,
 ) -> Tuple[float, int]:
     """Run a single episode and return total reward and steps."""
-    key, reset_key = jax.random.split(key)
-    obs, env_state = env.reset(reset_key)
+    obs, env_state = env.reset()
 
     total_reward = 0.0
     steps = 0
@@ -82,21 +73,17 @@ def main():
     key = jax.random.PRNGKey(42)
 
     # Create environment
-    env = PendulumEnv(
-        num_envs=1,  # Single environment for Phase 1
-        max_torque=2.0,
-        dt=0.05,
-    )
+    env = CartPoleEnv(num_envs=num_envs)
 
     # Create SAC agent
-    sac = SAC(obs_dim=3, action_dim=1, max_action=2.0, config=config)
+    sac = SAC(obs_dim=env.obs_dim, action_dim=env.action_dim, max_action=env.max_force, config=config)
 
     # Initialize SAC state
     key, sac_key = jax.random.split(key)
     sac_state = sac.init_state(sac_key)
 
     # Create replay buffer
-    replay_buffer = ReplayBuffer(capacity=buffer_capacity, obs_dim=3, action_dim=1)
+    replay_buffer = ReplayBuffer(capacity=buffer_capacity, obs_dim=env.obs_dim, action_dim=env.action_dim)
 
     # Initialize buffer state
     key, buffer_key = jax.random.split(key)
@@ -123,8 +110,7 @@ def main():
             episode_start_time = time.time()
 
             # Run episode
-            key, episode_key = jax.random.split(key)
-            obs, env_state = env.reset(episode_key)
+            obs, env_state = env.reset()
 
             episode_reward = 0.0
             episode_transitions = []
@@ -139,7 +125,7 @@ def main():
                 next_obs, reward, done, next_env_state = env.step(env_state, action)
 
                 # Store transition
-                transition = create_transition(obs=obs, action=action, reward=reward, next_obs=next_obs, done=done)
+                transition = Transition(obs=obs, action=action, reward=reward, next_obs=next_obs, done=done)
                 episode_transitions.append(transition)
 
                 episode_reward += float(reward)
@@ -189,7 +175,7 @@ def main():
 
                 # Update pendulum visualization with current policy
                 key, viz_key = jax.random.split(key)
-                obs, env_state = env.reset(viz_key)
+                obs, env_state = env.reset()
                 pendulum_viz.clear_trails()
 
                 for _ in range(50):  # Show 50 steps of current policy
