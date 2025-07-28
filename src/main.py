@@ -14,7 +14,8 @@ from tqdm import trange
 from environment.cartpole import CartPoleEnv
 from algorithms.replay_buffer import ReplayBuffer
 from algorithms.sac import SAC, SACConfig, SACState, Transition
-from utils.visualization import CartPoleVisualizer, TrainingVisualizer
+from utils.cartpole_viz import CartPoleLiveVisualizer
+from utils.training_viz import TrainingVisualizer
 
 
 def run_episode(
@@ -69,6 +70,7 @@ def main():
     num_episodes = 100
     update_freq = 1  # must be between 0 and num_envs
     eval_freq = 1  # TODO increase
+    live_visualization = True
 
     # Initialize random key
     key = jax.random.PRNGKey(42)
@@ -91,8 +93,14 @@ def main():
     buffer_state = replay_buffer.init_buffer_state(buffer_key)
 
     # Create visualizers
-    cartpole_viz = CartPoleVisualizer(num_cartpoles=1, l=1.0, rail_limit=2.0, figsize=(8, 6))
     training_viz = TrainingVisualizer(figsize=(12, 6))
+
+    # Create live visualizer for real-time training visualization
+    if live_visualization:
+        live_viz = CartPoleLiveVisualizer(num_cartpoles=min(num_envs, 4), length=env.length, rail_limit=env.rail_limit)
+        print('🎮 Live pygame visualization enabled')
+    else:
+        live_viz = None
 
     print(f'Environment: {num_envs} cart-pole(s)')
     print(f'Network architecture: {config.hidden_dims}')
@@ -115,6 +123,10 @@ def main():
 
             episode_reward = 0.0
 
+            # Clear trails for new episode
+            if live_viz is not None:
+                live_viz.clear_trails()
+
             # Collect episode data
             for step in trange(max_episode_steps, desc=f'Episode {episode}'):
                 # Select action
@@ -125,22 +137,21 @@ def main():
                 next_obs, reward, done, next_env_state = env.step(env_state, action)
 
                 # Store transitions for each environment
-                obs_np = np.array(obs)
-                next_obs_np = np.array(next_obs)
-                reward_np = np.array(reward)
-                done_np = np.array(done)
-                action_np = np.array(action)
-
                 for env_idx in range(num_envs):
                     transition = Transition(
-                        obs=obs_np[env_idx],
-                        action=action_np[env_idx],
-                        reward=reward_np[env_idx],
-                        next_obs=next_obs_np[env_idx],
-                        done=done_np[env_idx],
+                        obs=obs[env_idx],
+                        action=action[env_idx],
+                        reward=reward[env_idx],
+                        next_obs=next_obs[env_idx],
+                        done=done[env_idx],
                     )
                     # Add episode transitions to buffer
                     buffer_state = replay_buffer.add(buffer_state, transition)
+
+                # Update live visualization during training
+                if live_viz is not None:
+                    # Update visualization with current observations
+                    live_viz.update(np.array(obs), episode=episode, step=step, reward=episode_reward)
 
                 # Training updates
                 if replay_buffer.can_sample(buffer_state, batch_size):
@@ -183,23 +194,6 @@ def main():
                 if eval_reward > best_reward:
                     best_reward = eval_reward
 
-                # Update cart-pole visualization with current policy
-                key, viz_key = jax.random.split(key)
-                obs, env_state = env.reset()
-                cartpole_viz.clear_trails()
-
-                for _ in range(50):  # Show 50 steps of current policy
-                    action = sac.select_action(sac_state, obs, viz_key, deterministic=True)
-                    next_obs, _, _, next_env_state = env.step(env_state, action)
-
-                    # Update cart-pole visualization with first environment's state
-                    # obs format: [x, x_dot, cos(theta), sin(theta), theta_dot]
-                    obs_first = np.array(obs)
-                    cartpole_viz.update_cartpoles(obs_first)
-
-                    obs = next_obs
-                    env_state = next_env_state
-
                 # Update training plots
                 training_viz.update_plots()
 
@@ -238,11 +232,11 @@ def main():
     print('\n📊 Showing visualizations...')
     training_viz.update_plots()
     training_viz.show(block=False)
-    cartpole_viz.show(block=True)
 
     # Cleanup
-    cartpole_viz.close()
     training_viz.close()
+    if live_viz is not None:
+        live_viz.close()
 
     print('✅ Phase 1 implementation complete!')
 

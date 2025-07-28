@@ -66,8 +66,8 @@ class ReplayBuffer:
         # Update data at current pointer
         new_data = Transition(
             obs=buffer_state.data.obs.at[buffer_state.ptr].set(transition.obs.reshape(-1)),
-            action=buffer_state.data.action.at[buffer_state.ptr].set(transition.action.reshape(-1)),
-            reward=buffer_state.data.reward.at[buffer_state.ptr].set(transition.reward.reshape(-1)),
+            action=buffer_state.data.action.at[buffer_state.ptr].set(transition.action),
+            reward=buffer_state.data.reward.at[buffer_state.ptr].set(transition.reward.reshape(1)),
             next_obs=buffer_state.data.next_obs.at[buffer_state.ptr].set(transition.next_obs.reshape(-1)),
             done=buffer_state.data.done.at[buffer_state.ptr].set(transition.done.reshape(1)),
         )

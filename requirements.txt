@@ -1,5 +1,9 @@
-jax
+jax[cpu]
+jaxlib
 flax
 optax
 numpy
 matplotlib
+tqdm
+chex
+pygame
