@@ -114,6 +114,10 @@ def get_obs(x: chex.Array, x_dot: chex.Array, theta: chex.Array, theta_dot: chex
     Returns:
         Observation array [x, x_dot, cos(theta), sin(theta), theta_dot]
     """
+    print(f'x: {x.shape}')
+    print(f'x_dot: {x_dot.shape}')
+    print(f'theta: {theta.shape}')
+    print(f'theta_dot: {theta_dot.shape}')
     cos_theta = jnp.cos(theta)
     sin_theta = jnp.sin(theta)
 
@@ -199,32 +203,29 @@ class CartPoleEnv:
         # Initialize random key
         self.key = jax.random.PRNGKey(42)
 
-        # Create vectorized functions using vmap
-        self.reset_fn = jax.jit(jax.vmap(self._reset_single, in_axes=(0,)))
-        self.step_fn = jax.jit(jax.vmap(self._step_single, in_axes=(0, 0)))
+    def reset(self) -> Tuple[chex.Array, CartPoleState]:
+        """Reset environment(s) to initial state."""
+        self.key, reset_key = jax.random.split(self.key)
 
-    @staticmethod
-    def _reset_single(key: chex.PRNGKey) -> Tuple[chex.Array, CartPoleState]:
-        """Reset a single environment."""
-        # Random initial positions and velocities
-        x = jax.random.uniform(key, (), minval=-1.0, maxval=1.0)
-        key, subkey = jax.random.split(key)
-        x_dot = jax.random.uniform(subkey, (), minval=-0.5, maxval=0.5)
-
-        key, subkey = jax.random.split(key)
-        theta = jax.random.uniform(subkey, (), minval=-0.2, maxval=0.2)  # Start near vertical
-        key, subkey = jax.random.split(key)
-        theta_dot = jax.random.uniform(subkey, (), minval=-0.5, maxval=0.5)
+        # Generate keys for each environment
+        reset_key, key = jax.random.split(reset_key)
+        x = jax.random.uniform(key, (self.num_envs, 1), minval=-1.0, maxval=1.0)
+        reset_key, key = jax.random.split(reset_key)
+        theta_dot = jax.random.uniform(key, (self.num_envs, 1), minval=-0.5, maxval=0.5)
+        reset_key, key = jax.random.split(reset_key)
+        theta = jax.random.uniform(key, (self.num_envs, 1), minval=-0.2, maxval=0.2)  # Start near vertical
+        reset_key, key = jax.random.split(reset_key)
+        x_dot = jax.random.uniform(key, (self.num_envs, 1), minval=-0.5, maxval=0.5)
 
         state = CartPoleState(x=x, x_dot=x_dot, theta=theta, theta_dot=theta_dot)
         obs = get_obs(x, x_dot, theta, theta_dot)
 
         return obs, state
 
-    def _step_single(
+    def step(
         self, state: CartPoleState, action: chex.Array
     ) -> Tuple[chex.Array, chex.Array, chex.Array, CartPoleState]:
-        """Step a single environment."""
+        """Step environment(s) forward."""
         # Clip action to valid range
         force = jnp.clip(action, -self.max_force, self.max_force)
 
@@ -254,22 +255,8 @@ class CartPoleEnv:
         next_obs = get_obs(next_x, next_x_dot, next_theta, next_theta_dot)
 
         # Cart-pole environments typically don't terminate
-        done = jnp.array(False)
+        done = jnp.zeros((self.num_envs,), dtype=bool)
 
         next_state = CartPoleState(x=next_x, x_dot=next_x_dot, theta=next_theta, theta_dot=next_theta_dot)
 
         return next_obs, reward, done, next_state
-
-    def reset(self) -> Tuple[chex.Array, CartPoleState]:
-        """Reset environment(s) to initial state."""
-        self.key, reset_key = jax.random.split(self.key)
-
-        # Generate keys for each environment
-        keys = jax.random.split(reset_key, self.num_envs)
-        return self.reset_fn(keys)
-
-    def step(
-        self, state: CartPoleState, action: chex.Array
-    ) -> Tuple[chex.Array, chex.Array, chex.Array, CartPoleState]:
-        """Step environment(s) forward."""
-        return self.step_fn(state, action)

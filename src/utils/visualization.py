@@ -2,6 +2,7 @@
 Visualization utilities for cart-pole environments.
 """
 
+from jax._src.shard_map import P
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
@@ -111,20 +112,17 @@ class CartPoleVisualizer:
             states: Array of states [x, x_dot, cos(theta), sin(theta), theta_dot] for each cart-pole
                    or CartPoleState objects with x and theta attributes
         """
-        # Handle different input formats
-        if hasattr(states, 'x') and hasattr(states, 'theta'):  # CartPoleState object
-            x_positions = np.array(states.x)
-            theta_values = np.array(states.theta)
-        else:
-            # Observation array format [x, x_dot, cos(theta), sin(theta), theta_dot]
-            states = np.array(states)
-            if states.ndim == 1:
-                states = states.reshape(1, -1)
+        # Observation array format [x, x_dot, cos(theta), sin(theta), theta_dot]
+        states = np.array(states)
+        if states.ndim == 1:
+            states = states.reshape(1, -1)
 
-            x_positions = states[:, 0]
-            cos_theta = states[:, 2]
-            sin_theta = states[:, 3]
-            theta_values = np.arctan2(sin_theta, cos_theta)
+        print(f'states: {states}')
+
+        x_positions = states[:, 0]
+        cos_theta = states[:, 2]
+        sin_theta = states[:, 3]
+        theta_values = np.arctan2(sin_theta, cos_theta)
 
         # Ensure we have the right number of values
         x_positions = x_positions[: self.num_cartpoles]

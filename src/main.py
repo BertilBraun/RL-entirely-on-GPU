@@ -63,7 +63,7 @@ def main():
 
     # Environment parameters
     num_envs = 4  # Start with small number for Phase 1
-    max_episode_steps = 20  # TODO increase
+    max_episode_steps = 5  # TODO increase
     buffer_capacity = 100000
     batch_size = 256
     num_episodes = 100
@@ -117,11 +117,6 @@ def main():
             episode_transitions = []
 
             # Collect episode data
-            import cProfile
-
-            profiler = cProfile.Profile()
-            profiler.enable()
-
             for step in trange(max_episode_steps, desc=f'Episode {episode}'):
                 # Select action
                 key, action_key = jax.random.split(key)
@@ -140,7 +135,7 @@ def main():
                 for env_idx in range(num_envs):
                     transition = Transition(
                         obs=obs_np[env_idx],
-                        action=action_np[env_idx] if action_np.ndim > 0 else action_np,
+                        action=action_np[env_idx],
                         reward=reward_np[env_idx],
                         next_obs=next_obs_np[env_idx],
                         done=done_np[env_idx],
@@ -153,11 +148,9 @@ def main():
                 obs = next_obs
                 env_state = next_env_state
 
-            profiler.disable()
-            profiler.print_stats(sort='tottime')
-
             # Add episode transitions to buffer
             for transition in episode_transitions:
+                print(f'transition: {transition}')
                 buffer_state = replay_buffer.add(buffer_state, transition)
 
             episode_rewards.append(episode_reward)
@@ -176,10 +169,10 @@ def main():
                     # Update training visualization
                     if update_count % 10 == 0:
                         training_viz.update_metrics(
-                            actor_loss=float(info.get('actor_loss', 0)),
-                            critic_loss=float(info.get('critic_loss', 0)),
-                            alpha=float(info.get('alpha', config.alpha)),
-                            q_values=float(info.get('q1_mean', 0)),
+                            actor_loss=float(info.actor_info.actor_loss),
+                            critic_loss=float(info.critic_info.q1_loss),
+                            alpha=float(info.alpha_info.alpha),
+                            q_values=float(info.critic_info.q1_mean),
                         )
 
             # Update visualizations
@@ -206,7 +199,7 @@ def main():
 
                     # Update cart-pole visualization with first environment's state
                     # obs format: [x, x_dot, cos(theta), sin(theta), theta_dot]
-                    obs_first = np.array(obs)[0:1]  # Use first environment
+                    obs_first = np.array(obs)
                     cartpole_viz.update_cartpoles(obs_first)
 
                     obs = next_obs

@@ -39,6 +39,43 @@ class SACState(NamedTuple):
     alpha_opt_state: chex.ArrayTree | None = None
 
 
+@chex.dataclass
+class CriticInfo:
+    """Info from critic."""
+
+    q1_loss: chex.Array
+    q2_loss: chex.Array
+    q1_mean: chex.Array
+    q2_mean: chex.Array
+    target_q_mean: chex.Array
+
+
+@chex.dataclass
+class ActorInfo:
+    """Info from actor."""
+
+    actor_loss: chex.Array
+    log_probs_mean: chex.Array
+    q_actor_mean: chex.Array
+
+
+@chex.dataclass
+class AlphaInfo:
+    """Info from alpha."""
+
+    alpha_loss: chex.Array
+    alpha: chex.Array
+
+
+@chex.dataclass
+class SACInfo:
+    """Info from SAC."""
+
+    critic_info: CriticInfo
+    actor_info: ActorInfo
+    alpha_info: AlphaInfo
+
+
 class SAC:
     """
     Soft Actor-Critic algorithm implementation.
@@ -114,88 +151,13 @@ class SAC:
         """Soft update of target network parameters."""
         return jax.tree.map(lambda t, p: (1 - tau) * t + tau * p, target_params, params)
 
-    def critic_loss_fn(
-        self,
-        critic_params: chex.ArrayTree,
-        target_critic_params: chex.ArrayTree,
-        actor_params: chex.ArrayTree,
-        batch: Transition,
-        alpha: chex.Array,
-        key: chex.PRNGKey,
-    ) -> Tuple[chex.Array, dict]:
-        """Compute critic loss."""
-        # Current Q-values
-        q1_current, q2_current = self.critic.apply(critic_params, batch.obs, batch.action)
-
-        # Target Q-values
-        next_actions, next_log_probs = self.actor.sample_action(actor_params, batch.next_obs, key)
-
-        q1_target, q2_target = self.critic.apply(target_critic_params, batch.next_obs, next_actions)
-
-        # Take minimum of two target Q-values
-        q_target = jnp.minimum(q1_target, q2_target)
-
-        # Compute target with entropy regularization
-        target_q = batch.reward + self.config.gamma * (1 - batch.done) * (q_target - alpha * next_log_probs)
-
-        # Stop gradient on target
-        target_q = jax.lax.stop_gradient(target_q)
-
-        # Compute losses
-        q1_loss = jnp.mean((q1_current - target_q) ** 2)
-        q2_loss = jnp.mean((q2_current - target_q) ** 2)
-        total_loss = q1_loss + q2_loss
-
-        info = {
-            'critic_loss': total_loss,
-            'q1_loss': q1_loss,
-            'q2_loss': q2_loss,
-            'q1_mean': jnp.mean(q1_current),
-            'q2_mean': jnp.mean(q2_current),
-            'target_q_mean': jnp.mean(target_q),
-        }
-
-        return total_loss, info
-
-    def actor_loss_fn(
-        self,
-        actor_params: chex.ArrayTree,
-        critic_params: chex.ArrayTree,
-        batch: Transition,
-        alpha: chex.Array,
-        key: chex.PRNGKey,
-    ) -> Tuple[chex.Array, dict]:
-        """Compute actor loss."""
-        # Sample actions
-        actions, log_probs = self.actor.sample_action(actor_params, batch.obs, key)
-
-        # Get Q-values for sampled actions
-        q1, q2 = self.critic.apply(critic_params, batch.obs, actions)
-        q_min = jnp.minimum(q1, q2)
-
-        # Actor loss: maximize Q - alpha * log_pi
-        actor_loss = jnp.mean(alpha * log_probs - q_min)
-
-        info = {'actor_loss': actor_loss, 'log_probs_mean': jnp.mean(log_probs), 'q_actor_mean': jnp.mean(q_min)}
-
-        return actor_loss, info
-
-    def alpha_loss_fn(self, log_alpha: chex.Array, log_probs: chex.Array) -> Tuple[chex.Array, dict]:
-        """Compute alpha (temperature) loss."""
-        alpha = jnp.exp(log_alpha)
-        alpha_loss = -jnp.mean(alpha * (log_probs + self.target_entropy))
-
-        info = {'alpha_loss': alpha_loss, 'alpha': alpha}
-
-        return alpha_loss, info
-
-    def update_step(self, state: SACState, batch: Transition, key: chex.PRNGKey) -> Tuple[SACState, dict]:
+    def update_step(self, state: SACState, batch: Transition, key: chex.PRNGKey) -> Tuple[SACState, SACInfo]:
         """Single training step."""
         key_critic, key_actor, key_alpha = jax.random.split(key, 3)
 
         # Update critic
-        def critic_loss_fn(params: chex.ArrayTree) -> Tuple[chex.Array, dict]:
-            return self.critic_loss_fn(
+        def critic_loss_fn(params: chex.ArrayTree) -> Tuple[chex.Array, CriticInfo]:
+            return self._critic_loss_fn(
                 params, state.target_critic_params, state.actor_params, batch, state.alpha, key_critic
             )
 
@@ -205,8 +167,8 @@ class SAC:
         new_critic_params = optax.apply_updates(state.critic_params, critic_updates)
 
         # Update actor
-        def actor_loss_fn(params: chex.ArrayTree) -> Tuple[chex.Array, dict]:
-            return self.actor_loss_fn(params, new_critic_params, batch, state.alpha, key_actor)
+        def actor_loss_fn(params: chex.ArrayTree) -> Tuple[chex.Array, ActorInfo]:
+            return self._actor_loss_fn(params, new_critic_params, batch, state.alpha, key_actor)
 
         (actor_loss, actor_info), actor_grads = jax.value_and_grad(actor_loss_fn, has_aux=True)(state.actor_params)
 
@@ -217,14 +179,14 @@ class SAC:
         new_alpha = state.alpha
         new_log_alpha = state.log_alpha
         new_alpha_opt_state = state.alpha_opt_state
-        alpha_info = {}
+        alpha_info = AlphaInfo(alpha_loss=jnp.array(0.0), alpha=jnp.array(0.0))
 
         if self.config.auto_alpha and self.alpha_optimizer is not None:
             # Get log probs for alpha update
             _, log_probs = self.actor.sample_action(new_actor_params, batch.obs, key_alpha)
 
-            def alpha_loss_fn(log_alpha: chex.Array) -> Tuple[chex.Array, dict]:
-                return self.alpha_loss_fn(log_alpha, log_probs)
+            def alpha_loss_fn(log_alpha: chex.Array) -> Tuple[chex.Array, AlphaInfo]:
+                return self._alpha_loss_fn(log_alpha, log_probs)
 
             (alpha_loss, alpha_info), alpha_grads = jax.value_and_grad(alpha_loss_fn, has_aux=True)(state.log_alpha)
 
@@ -248,7 +210,7 @@ class SAC:
         )
 
         # Combine info
-        info = {**critic_info, **actor_info, **alpha_info}
+        info = SACInfo(critic_info=critic_info, actor_info=actor_info, alpha_info=alpha_info)
 
         return new_state, info
 
@@ -261,3 +223,81 @@ class SAC:
         else:
             action, _ = self.actor.sample_action(state.actor_params, obs, key)
             return action
+
+    def _critic_loss_fn(
+        self,
+        critic_params: chex.ArrayTree,
+        target_critic_params: chex.ArrayTree,
+        actor_params: chex.ArrayTree,
+        batch: Transition,
+        alpha: chex.Array,
+        key: chex.PRNGKey,
+    ) -> Tuple[chex.Array, CriticInfo]:
+        """Compute critic loss."""
+        # Current Q-values
+        q1_current, q2_current = self.critic.apply(critic_params, batch.obs, batch.action)
+
+        # Target Q-values
+        next_actions, next_log_probs = self.actor.sample_action(actor_params, batch.next_obs, key)
+
+        q1_target, q2_target = self.critic.apply(target_critic_params, batch.next_obs, next_actions)
+
+        # Take minimum of two target Q-values
+        q_target = jnp.minimum(q1_target, q2_target)
+
+        # Compute target with entropy regularization
+        target_q = batch.reward + self.config.gamma * (1 - batch.done) * (q_target - alpha * next_log_probs)
+
+        # Stop gradient on target
+        target_q = jax.lax.stop_gradient(target_q)
+
+        # Compute losses
+        q1_loss = jnp.mean((q1_current - target_q) ** 2)
+        q2_loss = jnp.mean((q2_current - target_q) ** 2)
+        total_loss = q1_loss + q2_loss
+
+        info = CriticInfo(
+            q1_loss=q1_loss,
+            q2_loss=q2_loss,
+            q1_mean=jnp.mean(q1_current),
+            q2_mean=jnp.mean(q2_current),
+            target_q_mean=jnp.mean(target_q),
+        )
+
+        return total_loss, info
+
+    def _actor_loss_fn(
+        self,
+        actor_params: chex.ArrayTree,
+        critic_params: chex.ArrayTree,
+        batch: Transition,
+        alpha: chex.Array,
+        key: chex.PRNGKey,
+    ) -> Tuple[chex.Array, ActorInfo]:
+        """Compute actor loss."""
+        # Sample actions
+        actions, log_probs = self.actor.sample_action(actor_params, batch.obs, key)
+
+        # Get Q-values for sampled actions
+        q1, q2 = self.critic.apply(critic_params, batch.obs, actions)
+        q_min = jnp.minimum(q1, q2)
+
+        # Actor loss: maximize Q - alpha * log_pi
+        actor_loss = jnp.mean(alpha * log_probs - q_min)
+
+        info = ActorInfo(
+            actor_loss=actor_loss,
+            log_probs_mean=jnp.mean(log_probs),
+            q_actor_mean=jnp.mean(q_min),
+        )
+
+        return actor_loss, info
+
+    def _alpha_loss_fn(self, log_alpha: chex.Array, log_probs: chex.Array) -> Tuple[chex.Array, AlphaInfo]:
+        """Compute alpha (temperature) loss."""
+        alpha = jnp.exp(log_alpha)
+        alpha_loss = -jnp.mean(alpha * (log_probs + self.target_entropy))
+
+        info = AlphaInfo(alpha_loss=alpha_loss, alpha=alpha)
+
+        return alpha_loss, info

@@ -3,9 +3,9 @@ JAX-based replay buffer implementation.
 """
 
 import jax
-import jax.numpy as jnp
-from typing import NamedTuple, Tuple
 import chex
+import jax.numpy as jnp
+from typing import NamedTuple
 
 
 class Transition(NamedTuple):
@@ -43,9 +43,9 @@ class ReplayBuffer:
         data = Transition(
             obs=jnp.zeros((self.capacity, self.obs_dim)),
             action=jnp.zeros((self.capacity, self.action_dim)),
-            reward=jnp.zeros((self.capacity,)),
+            reward=jnp.zeros((self.capacity, 1)),
             next_obs=jnp.zeros((self.capacity, self.obs_dim)),
-            done=jnp.zeros((self.capacity,), dtype=bool),
+            done=jnp.zeros((self.capacity, 1), dtype=bool),
         )
 
         return ReplayBufferState(data=data, size=jnp.array(0), ptr=jnp.array(0))
@@ -65,11 +65,11 @@ class ReplayBuffer:
         """
         # Update data at current pointer
         new_data = Transition(
-            obs=buffer_state.data.obs.at[buffer_state.ptr].set(transition.obs),
-            action=buffer_state.data.action.at[buffer_state.ptr].set(transition.action),
-            reward=buffer_state.data.reward.at[buffer_state.ptr].set(transition.reward),
-            next_obs=buffer_state.data.next_obs.at[buffer_state.ptr].set(transition.next_obs),
-            done=buffer_state.data.done.at[buffer_state.ptr].set(transition.done),
+            obs=buffer_state.data.obs.at[buffer_state.ptr].set(transition.obs.reshape(-1)),
+            action=buffer_state.data.action.at[buffer_state.ptr].set(transition.action.reshape(-1)),
+            reward=buffer_state.data.reward.at[buffer_state.ptr].set(transition.reward.reshape(-1)),
+            next_obs=buffer_state.data.next_obs.at[buffer_state.ptr].set(transition.next_obs.reshape(-1)),
+            done=buffer_state.data.done.at[buffer_state.ptr].set(transition.done.reshape(1)),
         )
 
         # Update pointer and size
