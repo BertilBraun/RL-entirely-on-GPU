@@ -5,7 +5,7 @@ JAX-based vectorized cart-pole environment implementation.
 import jax
 import chex
 import jax.numpy as jnp
-from typing import Tuple, NamedTuple
+from typing import Tuple
 
 
 # Default physical parameters - centralized in one place
@@ -114,15 +114,10 @@ def get_obs(x: chex.Array, x_dot: chex.Array, theta: chex.Array, theta_dot: chex
     Returns:
         Observation array [x, x_dot, cos(theta), sin(theta), theta_dot]
     """
-    print(f'x: {x.shape}')
-    print(f'x_dot: {x_dot.shape}')
-    print(f'theta: {theta.shape}')
-    print(f'theta_dot: {theta_dot.shape}')
     cos_theta = jnp.cos(theta)
     sin_theta = jnp.sin(theta)
 
-    # Stack along last axis to create observation vector
-    return jnp.stack([x, x_dot, cos_theta, sin_theta, theta_dot], axis=-1)
+    return jnp.concatenate([x, x_dot, cos_theta, sin_theta, theta_dot], axis=-1)
 
 
 @jax.jit
@@ -151,7 +146,9 @@ def reward_fn(
     """
     # Calculate pendulum tip height (y-coordinate)
     # y = l * cos(theta) when theta=0 is vertical upward
-    y_tip = length * jnp.cos(theta)
+    y_tip = -length * jnp.cos(theta)
+
+    return y_tip
 
     # Reward threshold: top 10% means y > 0.9 * l
     reward_threshold = 0.9 * length

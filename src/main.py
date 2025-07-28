@@ -63,12 +63,12 @@ def main():
 
     # Environment parameters
     num_envs = 4  # Start with small number for Phase 1
-    max_episode_steps = 5  # TODO increase
+    max_episode_steps = 50  # TODO increase
     buffer_capacity = 100000
     batch_size = 256
     num_episodes = 100
-    update_freq = 1
-    eval_freq = 10
+    update_freq = 1  # must be between 0 and num_envs
+    eval_freq = 1  # TODO increase
 
     # Initialize random key
     key = jax.random.PRNGKey(42)
@@ -114,7 +114,6 @@ def main():
             obs, env_state = env.reset()
 
             episode_reward = 0.0
-            episode_transitions = []
 
             # Collect episode data
             for step in trange(max_episode_steps, desc=f'Episode {episode}'):
@@ -140,7 +139,28 @@ def main():
                         next_obs=next_obs_np[env_idx],
                         done=done_np[env_idx],
                     )
-                    episode_transitions.append(transition)
+                    # Add episode transitions to buffer
+                    buffer_state = replay_buffer.add(buffer_state, transition)
+
+                # Training updates
+                if replay_buffer.can_sample(buffer_state, batch_size):
+                    for _ in range(num_envs // update_freq):
+                        key, sample_key = jax.random.split(key)
+                        batch = replay_buffer.sample(buffer_state, sample_key, batch_size)
+
+                        key, update_key = jax.random.split(key)
+                        sac_state, info = sac.update_step(sac_state, batch, update_key)
+
+                        update_count += 1
+
+                        # Update training visualization
+                        if update_count % 10 == 0:
+                            training_viz.update_metrics(
+                                actor_loss=float(info.actor_info.actor_loss),
+                                critic_loss=float(info.critic_info.q1_loss),
+                                alpha=float(info.alpha_info.alpha),
+                                q_values=float(info.critic_info.q1_mean),
+                            )
 
                 episode_reward += float(jnp.mean(reward))
 
@@ -148,32 +168,7 @@ def main():
                 obs = next_obs
                 env_state = next_env_state
 
-            # Add episode transitions to buffer
-            for transition in episode_transitions:
-                print(f'transition: {transition}')
-                buffer_state = replay_buffer.add(buffer_state, transition)
-
             episode_rewards.append(episode_reward)
-
-            # Training updates
-            if replay_buffer.can_sample(buffer_state, batch_size):
-                for _ in range(len(episode_transitions) // update_freq):
-                    key, sample_key = jax.random.split(key)
-                    batch = replay_buffer.sample(buffer_state, sample_key, batch_size)
-
-                    key, update_key = jax.random.split(key)
-                    sac_state, info = sac.update_step(sac_state, batch, update_key)
-
-                    update_count += 1
-
-                    # Update training visualization
-                    if update_count % 10 == 0:
-                        training_viz.update_metrics(
-                            actor_loss=float(info.actor_info.actor_loss),
-                            critic_loss=float(info.critic_info.q1_loss),
-                            alpha=float(info.alpha_info.alpha),
-                            q_values=float(info.critic_info.q1_mean),
-                        )
 
             # Update visualizations
             training_viz.update_metrics(episode_reward=episode_reward)

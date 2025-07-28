@@ -117,8 +117,6 @@ class CartPoleVisualizer:
         if states.ndim == 1:
             states = states.reshape(1, -1)
 
-        print(f'states: {states}')
-
         x_positions = states[:, 0]
         cos_theta = states[:, 2]
         sin_theta = states[:, 3]
