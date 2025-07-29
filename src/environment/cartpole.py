@@ -212,7 +212,7 @@ class CartPoleEnv:
         reset_key, key = jax.random.split(reset_key)
         theta_dot = jax.random.uniform(key, (self.num_envs, 1), minval=-0.5, maxval=0.5)
         reset_key, key = jax.random.split(reset_key)
-        theta = jax.random.uniform(key, (self.num_envs, 1), minval=-0.2, maxval=0.2)  # Start near vertical
+        theta = jax.random.uniform(key, (self.num_envs, 1), minval=-3.14, maxval=3.14)
         reset_key, key = jax.random.split(reset_key)
         x_dot = jax.random.uniform(key, (self.num_envs, 1), minval=-0.5, maxval=0.5)
 

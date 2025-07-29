@@ -195,6 +195,7 @@ def main():
 
                 # Update training plots
                 training_viz.update_plots()
+                training_viz.show(block=False)
 
                 print(
                     f'Episode {episode:4d} | '
