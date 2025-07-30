@@ -3,6 +3,8 @@ import pygame
 import numpy as np
 from typing import Tuple
 
+from environment.cartpole import CartPoleState
+
 
 @dataclass
 class EpisodeInfo:
@@ -83,7 +85,7 @@ class CartPoleLiveVisualizer:
         screen_y = int(self.center_y - y * self.scale)  # Flip Y axis
         return screen_x, screen_y
 
-    def update(self, states: np.ndarray, episode: int, step: int, rewards: np.ndarray) -> None:
+    def update(self, state: CartPoleState, episode: int, step: int, rewards: np.ndarray) -> None:
         """
         Update the visualization with new cart-pole states.
 
@@ -106,23 +108,17 @@ class CartPoleLiveVisualizer:
         # Clear screen
         self.screen.fill(Colors.background)
 
-        # Ensure states is 2D
-        states = np.array(states)
-        if states.ndim == 1:
-            states = states.reshape(1, -1)
-
         # Limit to number of cartpoles we're visualizing
-        states = states[: self.num_cartpoles]
         rewards = rewards[: self.num_cartpoles]
 
         # Draw each cartpole
-        for i, state in enumerate(states):
+        for i in range(self.num_cartpoles):
             offset_x, offset_y = self.offsets[i]
 
             # Extract state information
-            x = state[0]
-            cos_theta = state[2]
-            sin_theta = state[3]
+            x = state.x[i].item()
+            cos_theta = np.cos(state.theta[i].item())
+            sin_theta = np.sin(state.theta[i].item())
             theta = np.arctan2(sin_theta, cos_theta)
 
             # Calculate positions with offset
@@ -197,13 +193,14 @@ class CartPoleLiveVisualizer:
 
             # draw observations below the cartpole
             observations = [
-                f'x: {float(state[0]):.2f}',
-                f'x_dot: {float(state[1]):.2f}',
-                f'cos(theta): {float(state[2]):.2f}',
-                f'sin(theta): {float(state[3]):.2f}',
-                f'theta_dot: {float(state[4]):.2f}',
+                f'reward: {float(rewards[i]):.2f}',
+                f'x: {float(x):.2f}',
+                f'x_dot: {float(state.x_dot[i].item()):.2f}',
+                f'cos(theta): {float(cos_theta):.2f}',
+                f'sin(theta): {float(sin_theta):.2f}',
+                f'theta_dot: {float(state.theta_dot[i].item()):.2f}',
             ]
-            obs_y = offset_y + self.center_y + 35
+            obs_y = offset_y + self.center_y + 10
             for obs in observations:
                 obs_text = self.font.render(obs, True, Colors.text)
                 self.screen.blit(obs_text, (offset_x + self.center_x + 10, obs_y))
@@ -220,14 +217,6 @@ class CartPoleLiveVisualizer:
             text = self.font.render(text_str, True, Colors.text)
             self.screen.blit(text, (10, info_y))
             info_y += 25
-
-        # draw the rewards underneath the cartpoles
-        for i, reward in enumerate(rewards):
-            reward_text = self.font.render(f'Reward: {float(reward):.2f}', True, Colors.text)
-            x, y = self.offsets[i]
-            x += self.center_x
-            y += self.center_y
-            self.screen.blit(reward_text, (x + 10, y + 10))
 
         # Update display
         pygame.display.flip()

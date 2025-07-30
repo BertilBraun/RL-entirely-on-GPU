@@ -1,3 +1,4 @@
+from functools import partial
 import jax
 import chex
 import jax.numpy as jnp
@@ -9,12 +10,12 @@ DEFAULT_PARAMS = {
     'dt': 1 / 60,
     'g': 9.81,
     'length': 1.0,
-    'm': 0.1,  # pendulum mass
+    'm': 0.01,  # pendulum mass
     'M': 1.0,  # cart mass
-    'max_speed': 8.0,
-    'max_base_speed': 5.0,
-    'max_force': 10.0,
-    'rail_limit': 2.0,  # base can move between -2 and 2
+    'max_speed': 4.0,
+    'max_base_speed': 3.0,
+    'max_force': 15.0,
+    'rail_limit': 4.0,  # base can move between -4 and 4
     'theta_damp': 0.05,  # pole rotational damping
 }
 
@@ -77,17 +78,33 @@ def cartpole_step(
 
 
 @jax.jit
-def get_obs(state: CartPoleState) -> chex.Array:
+def get_obs(state: CartPoleState, rail_limit: float, max_base_speed: float, max_speed: float) -> chex.Array:
     """Observation: [x, x_dot, cos(theta), sin(theta), theta_dot]"""
-    return jnp.concatenate([state.x, state.x_dot, jnp.cos(state.theta), jnp.sin(state.theta), state.theta_dot], axis=-1)
+    return jnp.concatenate(
+        [
+            state.x / rail_limit,  # Normalize position to [-1, 1]
+            state.x_dot / max_base_speed,  # Normalize base velocity to [-1, 1]
+            jnp.cos(state.theta),  # Cosine of angle
+            jnp.sin(state.theta),  # Sine of angle
+            state.theta_dot / max_speed,  # Normalize angular velocity to [-1, 1]
+        ],
+        axis=-1,
+    )
 
 
 @jax.jit
-def reward_fn(state: CartPoleState, force: chex.Array, length: float) -> chex.Array:
+def reward_fn(state: CartPoleState, force: chex.Array, length: float, rail_limit: float) -> chex.Array:
     """
     Smooth reward favoring upright pole, small velocities, and gentle control.
     """
-    r = jnp.cos(state.theta) - 0.01 * (state.theta_dot**2) - 0.1 * (state.x**2 + state.x_dot**2) - 1e-4 * (force**2)
+    r = (
+        jnp.cos(state.theta)
+        - 0.01 * (state.theta_dot**2)
+        - 0.01 * (state.x**2 + state.x_dot**2)
+        - 1e-4 * (force**2)
+        + jnp.where(jnp.cos(state.theta) > 0.99, 10, 0)  # Large reward for pole being upright
+        - jnp.where(jnp.abs(state.x) >= rail_limit - 0.5, 10, 0)  # Large penalty for hitting the boundary
+    )
     return r.squeeze(-1)
 
 
@@ -138,6 +155,7 @@ class CartPoleEnv:
         # Initialize random key
         self.key = jax.random.PRNGKey(42)
 
+    @partial(jax.jit, static_argnums=(0,))
     def reset(self) -> Tuple[chex.Array, CartPoleState]:
         """Reset environment(s) to initial state."""
         self.key, reset_key = jax.random.split(self.key)
@@ -149,13 +167,16 @@ class CartPoleEnv:
 
         x = rand((self.num_envs, 1), -1.0, 1.0)
         x_dot = rand((self.num_envs, 1), -0.5, 0.5)
-        theta = rand((self.num_envs, 1), -jnp.pi, jnp.pi)
+        theta = rand((self.num_envs, 1), jnp.pi / 2, jnp.pi)
+        negative_theta = rand((self.num_envs, 1), 0, 1) > 0.5
+        theta = jnp.where(negative_theta, -theta, theta)
         theta_dot = rand((self.num_envs, 1), -0.5, 0.5)
 
         state = CartPoleState(x=x, x_dot=x_dot, theta=theta, theta_dot=theta_dot)
-        obs = get_obs(state)
+        obs = get_obs(state, self.rail_limit, self.max_base_speed, self.max_speed)
         return obs, state
 
+    @partial(jax.jit, static_argnums=(0,))
     def step(
         self, state: CartPoleState, action: chex.Array
     ) -> Tuple[chex.Array, chex.Array, chex.Array, CartPoleState]:
@@ -185,7 +206,7 @@ class CartPoleEnv:
         done = is_done(next_state, self.rail_limit)
 
         # Reward & outputs
-        reward = reward_fn(state, force, self.length)
-        next_obs = get_obs(next_state)
+        reward = reward_fn(state, force, self.length, self.rail_limit)
+        next_obs = get_obs(next_state, self.rail_limit, self.max_base_speed, self.max_speed)
 
         return next_obs, reward, done, next_state

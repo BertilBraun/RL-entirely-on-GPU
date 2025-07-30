@@ -6,13 +6,12 @@ Update-based training with auto-reset environments.
 import jax
 import jax.numpy as jnp
 import numpy as np
-from typing import Tuple
 import time
 from tqdm import trange
 
 from environment.cartpole import CartPoleEnv
 from algorithms.replay_buffer import ReplayBuffer, Transition
-from algorithms.sac import SAC, SACConfig, SACState
+from algorithms.sac import SAC, SACConfig
 from utils.cartpole_viz import CartPoleLiveVisualizer
 from utils.training_viz import TrainingVisualizer
 
@@ -24,10 +23,10 @@ def main():
 
     # Configuration
     config = SACConfig(
-        learning_rate=3e-4,
-        gamma=0.99,
+        learning_rate=1e-3,
+        gamma=0.9995,
         tau=0.005,
-        alpha=0.5,
+        alpha=0.4,
         auto_alpha=False,  # TODO true?
         hidden_dims=(32, 32),
     )
@@ -40,6 +39,8 @@ def main():
     batch_size = 256
     updates_per_step = 1  # Network updates per environment step
     live_visualization = True
+
+    total_updates = 2_000_000  # TODO remove
 
     # Initialize random key
     key = jax.random.PRNGKey(42)
@@ -145,7 +146,7 @@ def main():
 
             # Update live visualization
             if live_viz is not None:
-                live_viz.update(np.array(obs), episode=total_episodes_completed, step=step, rewards=np.array(reward))
+                live_viz.update(env_state, episode=total_episodes_completed, step=step, rewards=np.array(reward))
 
             # Perform network updates if we have enough data
             if replay_buffer.can_sample(buffer_state, batch_size):

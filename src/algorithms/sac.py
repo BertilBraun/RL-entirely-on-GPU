@@ -90,7 +90,9 @@ class SAC:
 
         # Set target entropy if not provided
         if config.target_entropy is None:
-            self.target_entropy = -action_dim - action_dim * jnp.log(self.max_action)
+            # Fixed: Use a more reasonable target entropy for better exploration
+            # Standard SAC uses -action_dim, but we'll use something less aggressive
+            self.target_entropy = -0.5 * action_dim  # Much less negative = more exploration
         else:
             self.target_entropy = config.target_entropy
 
@@ -181,7 +183,7 @@ class SAC:
         new_alpha = state.alpha
         new_log_alpha = state.log_alpha
         new_alpha_opt_state = state.alpha_opt_state
-        alpha_info = AlphaInfo(alpha_loss=jnp.array(0.0), alpha=jnp.array(0.0))
+        alpha_info = AlphaInfo(alpha_loss=jnp.array(0.0), alpha=new_alpha)
 
         if self.config.auto_alpha and self.alpha_optimizer is not None:
             # Get log probs for alpha update
