@@ -100,7 +100,9 @@ class ReplayBuffer:
             Batch of sampled transitions
         """
         # Sample random indices
-        indices = jax.random.randint(key, (batch_size,), 0, buffer_state.size)
+        # Ensure randint(high) is valid; when size==0 we sample 0.
+        size = jnp.maximum(buffer_state.size, 1)
+        indices = jax.random.randint(key, (batch_size,), 0, size)
 
         # Extract sampled data
         return Transition(
