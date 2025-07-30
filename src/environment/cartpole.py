@@ -149,25 +149,22 @@ class CartPoleEnv:
         self.action_dim = 1  # Force applied to base
         self.obs_dim = 5  # [x, x_dot, cos(theta), sin(theta), theta_dot]
 
-        # Initialize random key
-        self.key = jax.random.PRNGKey(42)
-
     @partial(jax.jit, static_argnums=(0,))
-    def reset(self) -> Tuple[chex.Array, CartPoleState]:
+    def reset(self, reset_key: chex.PRNGKey) -> Tuple[chex.Array, CartPoleState]:
         """Reset environment(s) to initial state."""
-        self.key, reset_key = jax.random.split(self.key)
 
-        def rand(shape, lo, hi):
-            nonlocal reset_key
-            reset_key, key = jax.random.split(reset_key)
-            return jax.random.uniform(key, shape, minval=lo, maxval=hi)
+        def rand(shape, lo, hi, key):
+            key, sub_key = jax.random.split(key)
+            return jax.random.uniform(sub_key, shape, minval=lo, maxval=hi)
 
-        x = rand((self.num_envs, 1), -1.0, 1.0)
-        x_dot = rand((self.num_envs, 1), -0.5, 0.5)
-        theta = rand((self.num_envs, 1), jnp.pi / 2, jnp.pi)
-        negative_theta = rand((self.num_envs, 1), 0, 1) > 0.5
+        key_x, key_x_dot, key_theta, key_theta_neg, key_theta_dot = jax.random.split(reset_key, 5)
+
+        x = rand((self.num_envs, 1), -1.0, 1.0, key_x)
+        x_dot = rand((self.num_envs, 1), -0.5, 0.5, key_x_dot)
+        theta = rand((self.num_envs, 1), jnp.pi / 2, jnp.pi, key_theta)
+        negative_theta = rand((self.num_envs, 1), 0, 1, key_theta_neg) > 0.5
         theta = jnp.where(negative_theta, -theta, theta)
-        theta_dot = rand((self.num_envs, 1), -0.5, 0.5)
+        theta_dot = rand((self.num_envs, 1), -0.5, 0.5, key_theta_dot)
 
         state = CartPoleState(x=x, x_dot=x_dot, theta=theta, theta_dot=theta_dot)
         obs = get_obs(state, self.rail_limit, self.max_base_speed, self.max_speed)

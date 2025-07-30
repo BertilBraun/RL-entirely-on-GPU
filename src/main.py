@@ -34,7 +34,7 @@ def main():
     num_envs = 256
     max_episode_steps = 1000
     total_updates = 200_000  # Total number of network updates to perform
-    buffer_capacity = 1_000_000
+    buffer_capacity = 100_000
     batch_size = 256
     updates_per_step = num_envs // 4  # Network updates per environment step
     live_visualization = True
@@ -78,7 +78,8 @@ def main():
     print('=' * 60)
 
     # Initialize environment and tracking
-    obs, env_state = env.reset()
+    key, reset_key = jax.random.split(key)
+    obs, env_state = env.reset(reset_key)
     env_steps = jnp.zeros(num_envs, dtype=jnp.int32)  # Track steps per environment
     episode_rewards = jnp.zeros(num_envs)  # Track cumulative reward per env
     total_episodes_completed = 0
@@ -126,7 +127,7 @@ def main():
 
             # Auto-reset environments that are done or reached max steps
             key, reset_key = jax.random.split(key)
-            reset_obs, reset_env_state = env.reset()
+            reset_obs, reset_env_state = env.reset(reset_key)
 
             # Use reset values where needed, keep current values otherwise
             obs = jnp.where(should_reset[..., None], reset_obs, next_obs)

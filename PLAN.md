@@ -123,21 +123,3 @@ batched_step = jax.vmap(pendulum_step, in_axes=(0, 0, 0))
 * Replay buffer stores transitions for all agents
 * Each agent steps once per environment loop
 * Multiple training updates per step if needed
-
----
-
-## ✅ Summary of Core Components
-
-| Component           | Description                                  |
-| ------------------- | -------------------------------------------- |
-| `pendulum_step()`   | JAX batched physics step                     |
-| `reward_fn()`       | JAX reward computation                       |
-| `get_obs()`         | Converts (θ, θ̇) to `[cos, sin, θ̇]`           |
-| `ActorNet`          | Flax NN: obs → (mu, log\_std)                |
-| `CriticNet`         | Flax NN: (obs, action) → Q                   |
-| `SAC Losses`        | JAX loss functions for critic and actor      |
-| `ReplayBuffer`      | JAX DeviceArray-based circular buffer        |
-| `vmap/batched loop` | Runs all environments in parallel            |
-| `TrainingStep`      | JIT'd update of actor/critic/alpha params    |
-| `Visualization`     | Real-time display of few sample environments |
-
