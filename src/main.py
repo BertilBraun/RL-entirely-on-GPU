@@ -1,6 +1,6 @@
 """
 Main script for JAX-based SAC for Cart-Pole Environment.
-Demonstrates CPU-compatible implementation with all JAX APIs.
+Update-based training with auto-reset environments.
 """
 
 import jax
@@ -17,49 +17,10 @@ from utils.cartpole_viz import CartPoleLiveVisualizer
 from utils.training_viz import TrainingVisualizer
 
 
-def run_episode(
-    env: CartPoleEnv,
-    sac: SAC,
-    sac_state: SACState,
-    key: jax.Array,
-    max_steps: int = 200,
-    deterministic: bool = False,
-) -> Tuple[float, int]:
-    """Run a single episode and return total reward and steps."""
-    obs, env_state = env.reset()
-
-    total_reward = 0.0
-    steps = 0
-
-    for step in range(max_steps):
-        # Select action
-        if deterministic:
-            action = sac.select_action_deterministic(sac_state, obs)
-        else:
-            key, action_key = jax.random.split(key)
-            action = sac.select_action_stochastic(sac_state, obs, action_key)
-
-        # Take environment step
-        next_obs, reward, done, next_env_state = env.step(env_state, action)
-
-        total_reward += float(jnp.mean(reward))  # Average reward across environments
-        steps += 1
-
-        # Update for next iteration
-        obs = next_obs
-        env_state = next_env_state
-
-        # Check if episode should end (cart-pole envs typically don't terminate)
-        if float(jnp.any(done)):
-            break
-
-    return total_reward, steps
-
-
 def main():
-    """Main training loop."""
-    print('🚀 Starting JAX-based SAC for Cart-Pole')
-    print('=' * 50)
+    """Main training loop based on network updates."""
+    print('🚀 Starting JAX-based SAC for Cart-Pole (Update-based Training)')
+    print('=' * 60)
 
     # Configuration
     config = SACConfig(
@@ -71,14 +32,13 @@ def main():
         hidden_dims=(32, 32),
     )
 
-    # Environment parameters
-    num_envs = 128
-    max_episode_steps = 500  # TODO increase
-    buffer_capacity = num_envs * max_episode_steps * 2  # approximately 2 episodes
+    # Training parameters
+    num_envs = 256
+    max_episode_steps = 1000
+    total_updates = 50000  # Total number of network updates to perform
+    buffer_capacity = num_envs * max_episode_steps * 2
     batch_size = 256
-    num_episodes = 200
-    update_freq = 1 / 8  # must be between 0 and 1
-    eval_freq = 1  # TODO increase
+    updates_per_step = 1  # Network updates per environment step
     live_visualization = True
 
     # Initialize random key
@@ -104,7 +64,7 @@ def main():
     # Create visualizers
     training_viz = TrainingVisualizer(figsize=(12, 6))
 
-    # Create live visualizer for real-time training visualization
+    # Create live visualizer
     if live_visualization:
         live_viz = CartPoleLiveVisualizer(num_cartpoles=min(num_envs, 4), length=env.length, rail_limit=env.rail_limit)
         print('🎮 Live pygame visualization enabled')
@@ -114,130 +74,165 @@ def main():
     print(f'Environment: {num_envs} cart-pole(s)')
     print(f'Network architecture: {config.hidden_dims}')
     print(f'Learning rate: {config.learning_rate}')
-    print(f'Replay buffer capacity: {buffer_capacity}')
+    print(f'Total updates: {total_updates}')
+    print(f'Max episode steps: {max_episode_steps}')
     print(f'Batch size: {batch_size}')
-    print('=' * 50)
+    print('=' * 60)
 
-    # Training loop
-    episode_rewards = []
-    best_reward = float('-inf')
+    # Initialize environment and tracking
+    obs, env_state = env.reset()
+    env_steps = jnp.zeros(num_envs, dtype=jnp.int32)  # Track steps per environment
+    episode_rewards = jnp.zeros(num_envs)  # Track cumulative reward per env
+    total_episodes_completed = 0
     update_count = 0
 
+    # Training metrics
+    recent_rewards = []
+    start_time = time.time()
+
+    # Main training loop - continue until we've done all updates
+    step = 0
+    pbar = trange(total_updates, desc='Network Updates')
+
     try:
-        for episode in range(num_episodes):
-            episode_start_time = time.time()
+        while update_count < total_updates:
+            # Select actions
+            key, action_key = jax.random.split(key)
+            action = sac.select_action_stochastic(sac_state, obs, action_key)
 
-            # Run episode
-            obs, env_state = env.reset()
+            # Take environment step
+            next_obs, reward, done, next_env_state = env.step(env_state, action)
 
-            episode_reward = 0.0
+            # Update step counts and episode rewards
+            env_steps += 1
+            episode_rewards += reward
 
-            # Clear trails for new episode
+            # Check which environments should reset (done OR max steps reached)
+            should_reset = done | (env_steps >= max_episode_steps)
+
+            # Store completed episode rewards before reset
+            completed_rewards = episode_rewards[should_reset]
+            if jnp.any(should_reset):
+                recent_rewards.extend(completed_rewards.tolist())
+                total_episodes_completed += int(jnp.sum(should_reset))
+
+                # Keep only recent rewards for visualization
+                if len(recent_rewards) > 100:
+                    recent_rewards = recent_rewards[-100:]
+
+            # Store transitions in replay buffer
+            buffer_state = replay_buffer.add_batch(
+                buffer_state,
+                Transition(obs=obs, action=action, reward=reward, next_obs=next_obs, done=done),
+            )
+
+            # Auto-reset environments that are done or reached max steps
+            key, reset_key = jax.random.split(key)
+            reset_obs, reset_env_state = env.reset()
+
+            # Use reset values where needed, keep current values otherwise
+            obs = jnp.where(should_reset[..., None], reset_obs, next_obs)
+            env_state_dict = {}
+            for field_name in next_env_state.__dataclass_fields__.keys():
+                current_field = getattr(next_env_state, field_name)
+                reset_field = getattr(reset_env_state, field_name)
+                env_state_dict[field_name] = jnp.where(should_reset[..., None], reset_field, current_field)
+            env_state = type(next_env_state)(**env_state_dict)
+
+            # Reset tracking for environments that reset
+            env_steps = jnp.where(should_reset, 0, env_steps)
+            episode_rewards = jnp.where(should_reset, 0.0, episode_rewards)
+
+            # Update live visualization
             if live_viz is not None:
-                live_viz.clear_trails()
+                live_viz.update(np.array(obs), episode=total_episodes_completed, step=step, rewards=np.array(reward))
 
-            # Collect episode data
-            for step in trange(max_episode_steps, desc=f'Episode {episode}'):
-                # Select action
-                action = sac.select_action_deterministic(sac_state, obs)
+            # Perform network updates if we have enough data
+            if replay_buffer.can_sample(buffer_state, batch_size):
+                for _ in range(updates_per_step):
+                    if update_count >= total_updates:
+                        break
 
-                # Take environment step
-                next_obs, reward, done, next_env_state = env.step(env_state, action)
+                    key, sample_key = jax.random.split(key)
+                    batch = replay_buffer.sample(buffer_state, sample_key, batch_size)
 
-                # Store transitions for each environment
-                buffer_state = replay_buffer.add_batch(
-                    buffer_state,
-                    Transition(obs=obs, action=action, reward=reward, next_obs=next_obs, done=done),
+                    key, update_key = jax.random.split(key)
+                    sac_state, info = sac.update_step(sac_state, batch, update_key)
+
+                    update_count += 1
+                    pbar.update(1)
+
+                    # Update training visualization
+                    if update_count % 10 == 0:
+                        training_viz.update_metrics(
+                            actor_loss=float(info.actor_info.actor_loss),
+                            critic_loss=float(info.critic_info.q1_loss),
+                            alpha=float(info.alpha_info.alpha),
+                            q_values=float(info.critic_info.q1_mean),
+                        )
+
+                    # Update episode reward if we have recent data
+                    if recent_rewards and update_count % 50 == 0:
+                        avg_recent_reward = (
+                            np.mean(recent_rewards[-20:]) if len(recent_rewards) >= 20 else np.mean(recent_rewards)
+                        )
+                        training_viz.update_metrics(episode_reward=avg_recent_reward)
+
+            # Periodic logging and visualization updates
+            if update_count % 1000 == 0 and update_count > 0:
+                elapsed_time = time.time() - start_time
+                steps_per_sec = step / elapsed_time if elapsed_time > 0 else 0
+                updates_per_sec = update_count / elapsed_time if elapsed_time > 0 else 0
+
+                avg_reward = (
+                    np.mean(recent_rewards[-50:])
+                    if len(recent_rewards) >= 50
+                    else (np.mean(recent_rewards) if recent_rewards else 0.0)
                 )
 
-                # Update live visualization during training
-                if live_viz is not None:
-                    # Update visualization with current observations
-                    live_viz.update(np.array(obs), episode=episode, step=step, rewards=np.array(reward))
-
-                episode_reward += float(jnp.mean(reward))
-
-                # Update for next step
-                obs = next_obs
-                env_state = next_env_state
-
-                # Training updates
-                if replay_buffer.can_sample(buffer_state, batch_size):
-                    for _ in range(int(num_envs * update_freq)):
-                        key, sample_key = jax.random.split(key)
-                        batch = replay_buffer.sample(buffer_state, sample_key, batch_size)
-
-                        key, update_key = jax.random.split(key)
-                        sac_state, info = sac.update_step(sac_state, batch, update_key)
-
-                        update_count += 1
-
-                        # Update training visualization
-                        if update_count % 10 == 0:
-                            training_viz.update_metrics(
-                                actor_loss=float(info.actor_info.actor_loss),
-                                critic_loss=float(info.critic_info.q1_loss),
-                                alpha=float(info.alpha_info.alpha),
-                                q_values=float(info.critic_info.q1_mean),
-                            )
-
-            episode_rewards.append(episode_reward)
-
-            # Update visualizations
-            training_viz.update_metrics(episode_reward=episode_reward)
-
-            # Evaluation
-            if episode % eval_freq == 0:
-                key, eval_key = jax.random.split(key)
-                eval_reward, eval_steps = run_episode(
-                    env, sac, sac_state, eval_key, max_steps=max_episode_steps, deterministic=True
-                )
-
-                if eval_reward > best_reward:
-                    best_reward = eval_reward
-
-                # Update training plots
+                # Update and show training plots
                 training_viz.update_plots()
                 training_viz.show(block=False)
 
                 print(
-                    f'Episode {episode:4d} | '
-                    f'Reward: {episode_reward:8.2f} | '
-                    f'Eval: {eval_reward:8.2f} | '
-                    f'Best: {best_reward:8.2f} | '
+                    f'Updates: {update_count:6d}/{total_updates} | '
+                    f'Episodes: {total_episodes_completed:5d} | '
+                    f'Avg Reward: {avg_reward:8.2f} | '
                     f'Buffer: {int(buffer_state.size):6d} | '
-                    f'Updates: {update_count:6d} | '
-                    f'Time: {time.time() - episode_start_time:.2f}s'
+                    f'Steps/s: {steps_per_sec:.1f} | '
+                    f'Updates/s: {updates_per_sec:.1f}'
                 )
+
+            step += 1
+
+        pbar.close()
 
     except KeyboardInterrupt:
         print('\n⏸️  Training interrupted by user')
 
-    # Final evaluation
-    print('\n' + '=' * 50)
-    print('🏁 Final Evaluation')
+    # Final statistics
+    print('\n' + '=' * 60)
+    print('🏁 Training Complete')
 
-    final_rewards = []
-    for i in range(10):
-        key, eval_key = jax.random.split(key)
-        eval_reward, _ = run_episode(env, sac, sac_state, eval_key, max_steps=max_episode_steps, deterministic=True)
-        final_rewards.append(eval_reward)
+    elapsed_time = time.time() - start_time
+    print(f'Total updates completed: {update_count}')
+    print(f'Total episodes completed: {total_episodes_completed}')
+    print(f'Total environment steps: {step}')
+    print(f'Training time: {elapsed_time:.1f}s')
+    print(f'Average updates per second: {update_count / elapsed_time:.1f}')
 
-    avg_reward = np.mean(final_rewards)
-    std_reward = np.std(final_rewards)
+    if recent_rewards:
+        final_avg_reward = np.mean(recent_rewards[-50:]) if len(recent_rewards) >= 50 else np.mean(recent_rewards)
+        print(f'Final average reward (last 50 episodes): {final_avg_reward:.2f}')
 
-    print(f'Average reward: {avg_reward:.2f} ± {std_reward:.2f}')
-    print(f'Best episode reward: {best_reward:.2f}')
-    print(f'Total training episodes: {len(episode_rewards)}')
-    print(f'Total updates: {update_count}')
-
-    # Show visualizations
-    print('\n📊 Showing visualizations...')
+    # Final visualization update
+    print('\n📊 Showing final visualizations...')
     training_viz.update_plots()
     training_viz.show(block=False)
 
-    # save the training viz
+    # Save training visualization
     training_viz.save('training_viz.png')
+    print('📁 Training visualization saved as training_viz.png')
 
     # Cleanup
     training_viz.close()

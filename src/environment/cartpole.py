@@ -1,31 +1,21 @@
-"""
-JAX-based vectorized cart-pole with position-dependent viscous damping.
-"""
-
 import jax
 import chex
 import jax.numpy as jnp
 from typing import Tuple
 
 
-# Default physical & damping parameters
+# Default physical parameters
 DEFAULT_PARAMS = {
     'dt': 1 / 60,
     'g': 9.81,
     'length': 1.0,
-    'm': 1.0,  # pendulum mass
+    'm': 0.1,  # pendulum mass
     'M': 1.0,  # cart mass
     'max_speed': 8.0,
     'max_base_speed': 5.0,
     'max_force': 10.0,
     'rail_limit': 2.0,  # base can move between -2 and 2
-    # --- New viscous damping knobs ---
-    # Cart viscous damping = x_damp_base + x_damp_edge_k * (|x|/rail_limit)**x_damp_edge_p
-    'x_damp_base': 0.0,
-    'x_damp_edge_k': 5.0,
-    'x_damp_edge_p': 2.0,
-    # Pole viscous damping (small, constant)
-    'theta_damp': 0.05,
+    'theta_damp': 0.05,  # pole rotational damping
 }
 
 
@@ -41,10 +31,7 @@ class CartPoleState:
 
 @jax.jit
 def cartpole_step(
-    x: chex.Array,
-    x_dot: chex.Array,
-    theta: chex.Array,
-    theta_dot: chex.Array,
+    state: CartPoleState,
     force: chex.Array,
     dt: float,
     g: float,
@@ -52,43 +39,32 @@ def cartpole_step(
     m: float,
     M: float,
     rail_limit: float,
-    x_damp_base: float,
-    x_damp_edge_k: float,
-    x_damp_edge_p: float,
     theta_damp: float,
-) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
+) -> CartPoleState:
     """
-    Vectorized cart-pole step with position-dependent viscous damping on the cart,
-    and small viscous damping on the pole. No bounce at the rails.
+    Traditional cart-pole dynamics with simple boundary handling.
     """
-    cos_t = jnp.cos(theta)
-    sin_t = jnp.sin(theta)
+    cos_t = jnp.cos(state.theta)
+    sin_t = jnp.sin(state.theta)
     total_mass = M + m
 
-    # Position-dependent viscous coefficient c(x)
-    t = jnp.clip(jnp.abs(x) / rail_limit, 0.0, 1.0)
-    c_x = x_damp_base + x_damp_edge_k * (t**x_damp_edge_p)  # [N*s/m] effective
-
-    # Apply damping as a FORCE before solving the coupled dynamics
-    force_eff = force - c_x * x_dot
-
-    # Standard frictionless cart-pole with force -> force_eff
-    temp = (force_eff + m * length * theta_dot**2 * sin_t) / total_mass
+    # Standard cart-pole dynamics
+    temp = (force + m * length * state.theta_dot**2 * sin_t) / total_mass
     num = g * sin_t - cos_t * temp
     den = length * (4.0 / 3.0 - m * cos_t**2 / total_mass)
     theta_ddot = num / den
     x_ddot = temp - (m * length * theta_ddot * cos_t) / total_mass
 
-    # Pivot viscous damping (interpreted as per-second coefficient)
-    theta_ddot = theta_ddot - theta_damp * theta_dot
+    # Apply damping
+    theta_ddot = theta_ddot - theta_damp * state.theta_dot
 
-    # Semi-implicit Euler
-    x_dot_new = x_dot + dt * x_ddot
-    x_new = x + dt * x_dot_new
-    theta_dot_new = theta_dot + dt * theta_ddot
-    theta_new = theta + dt * theta_dot_new
+    # Semi-implicit Euler integration
+    x_dot_new = state.x_dot + dt * x_ddot
+    x_new = state.x + dt * x_dot_new
+    theta_dot_new = state.theta_dot + dt * theta_ddot
+    theta_new = state.theta + dt * theta_dot_new
 
-    # Rail clamp (no bounce)
+    # Simple boundary handling: clip position and zero velocity
     x_new_clipped = jnp.clip(x_new, -rail_limit, rail_limit)
     clipped = x_new_clipped != x_new
     x_new = x_new_clipped
@@ -96,36 +72,35 @@ def cartpole_step(
 
     # Wrap angle to [-pi, pi]
     theta_new = jnp.mod(theta_new + jnp.pi, 2.0 * jnp.pi) - jnp.pi
-    return x_new, x_dot_new, theta_new, theta_dot_new
+
+    return CartPoleState(x=x_new, x_dot=x_dot_new, theta=theta_new, theta_dot=theta_dot_new)
 
 
 @jax.jit
-def get_obs(x: chex.Array, x_dot: chex.Array, theta: chex.Array, theta_dot: chex.Array) -> chex.Array:
+def get_obs(state: CartPoleState) -> chex.Array:
     """Observation: [x, x_dot, cos(theta), sin(theta), theta_dot]"""
-    return jnp.concatenate([x, x_dot, jnp.cos(theta), jnp.sin(theta), theta_dot], axis=-1)
+    return jnp.concatenate([state.x, state.x_dot, jnp.cos(state.theta), jnp.sin(state.theta), state.theta_dot], axis=-1)
 
 
 @jax.jit
-def reward_fn(
-    x: chex.Array,
-    x_dot: chex.Array,
-    theta: chex.Array,
-    theta_dot: chex.Array,
-    force: chex.Array,
-    length: float,
-) -> chex.Array:
+def reward_fn(state: CartPoleState, force: chex.Array, length: float) -> chex.Array:
     """
     Smooth reward favoring upright pole, small velocities, and gentle control.
-    (Removed unreachable code in original version.)
     """
-    r = jnp.cos(theta) - 0.01 * (theta_dot**2) - 0.1 * (x**2 + x_dot**2) - 1e-4 * (force**2)
+    r = jnp.cos(state.theta) - 0.01 * (state.theta_dot**2) - 0.1 * (state.x**2 + state.x_dot**2) - 1e-4 * (force**2)
     return r.squeeze(-1)
+
+
+@jax.jit
+def is_done(state: CartPoleState, rail_limit: float) -> chex.Array:
+    """Episode is done when cart hits boundary."""
+    return (jnp.abs(state.x) >= rail_limit).squeeze(-1)
 
 
 class CartPoleEnv:
     """
-    JAX-based vectorized cart-pole environment with soft "edge braking"
-    via position-dependent viscous damping.
+    JAX-based vectorized cart-pole environment with traditional physics.
+    Simple boundary handling - episode ends when cart hits rails.
     """
 
     def __init__(
@@ -140,10 +115,6 @@ class CartPoleEnv:
         length: float = DEFAULT_PARAMS['length'],
         m: float = DEFAULT_PARAMS['m'],
         M: float = DEFAULT_PARAMS['M'],
-        # New damping params (can be tuned at init)
-        x_damp_base: float = DEFAULT_PARAMS['x_damp_base'],
-        x_damp_edge_k: float = DEFAULT_PARAMS['x_damp_edge_k'],
-        x_damp_edge_p: float = DEFAULT_PARAMS['x_damp_edge_p'],
         theta_damp: float = DEFAULT_PARAMS['theta_damp'],
     ):
         assert num_envs > 0, 'num_envs must be at least 1'
@@ -158,11 +129,6 @@ class CartPoleEnv:
         self.length = length
         self.m = m
         self.M = M
-
-        # Damping config
-        self.x_damp_base = x_damp_base
-        self.x_damp_edge_k = x_damp_edge_k
-        self.x_damp_edge_p = x_damp_edge_p
         self.theta_damp = theta_damp
 
         # Action and observation spaces
@@ -182,12 +148,12 @@ class CartPoleEnv:
             return jax.random.uniform(key, shape, minval=lo, maxval=hi)
 
         x = rand((self.num_envs, 1), -1.0, 1.0)
-        theta_dot = rand((self.num_envs, 1), -0.5, 0.5)
-        theta = rand((self.num_envs, 1), -jnp.pi, jnp.pi)
         x_dot = rand((self.num_envs, 1), -0.5, 0.5)
+        theta = rand((self.num_envs, 1), -jnp.pi, jnp.pi)
+        theta_dot = rand((self.num_envs, 1), -0.5, 0.5)
 
         state = CartPoleState(x=x, x_dot=x_dot, theta=theta, theta_dot=theta_dot)
-        obs = get_obs(x, x_dot, theta, theta_dot)
+        obs = get_obs(state)
         return obs, state
 
     def step(
@@ -198,12 +164,9 @@ class CartPoleEnv:
         action = jnp.asarray(action).reshape(self.num_envs, 1)
         force = jnp.clip(action, -self.max_force, self.max_force)
 
-        # Physics step (soft edge damping inside)
-        next_x, next_x_dot, next_theta, next_theta_dot = cartpole_step(
-            x=state.x,
-            x_dot=state.x_dot,
-            theta=state.theta,
-            theta_dot=state.theta_dot,
+        # Physics step
+        next_state = cartpole_step(
+            state=state,
             force=force,
             dt=self.dt,
             g=self.g,
@@ -211,20 +174,18 @@ class CartPoleEnv:
             m=self.m,
             M=self.M,
             rail_limit=self.rail_limit,
-            x_damp_base=self.x_damp_base,
-            x_damp_edge_k=self.x_damp_edge_k,
-            x_damp_edge_p=self.x_damp_edge_p,
             theta_damp=self.theta_damp,
         )
 
-        # Clip velocities (kept as safety caps)
-        next_x_dot = jnp.clip(next_x_dot, -self.max_base_speed, self.max_base_speed)
-        next_theta_dot = jnp.clip(next_theta_dot, -self.max_speed, self.max_speed)
+        # Clip velocities (safety caps)
+        next_state.x_dot = jnp.clip(next_state.x_dot, -self.max_base_speed, self.max_base_speed)
+        next_state.theta_dot = jnp.clip(next_state.theta_dot, -self.max_speed, self.max_speed)
+
+        # Check if episode is done (hit boundary)
+        done = is_done(next_state, self.rail_limit)
 
         # Reward & outputs
-        reward = reward_fn(state.x, state.x_dot, state.theta, state.theta_dot, force, self.length)
-        next_obs = get_obs(next_x, next_x_dot, next_theta, next_theta_dot)
-        done = jnp.zeros((self.num_envs,), dtype=bool)
+        reward = reward_fn(state, force, self.length)
+        next_obs = get_obs(next_state)
 
-        next_state = CartPoleState(x=next_x, x_dot=next_x_dot, theta=next_theta, theta_dot=next_theta_dot)
         return next_obs, reward, done, next_state
