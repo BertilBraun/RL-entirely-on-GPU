@@ -31,7 +31,7 @@ def main():
     )
 
     # Training parameters
-    num_envs = 32
+    num_envs = 256
     max_episode_steps = 1000
     total_updates = 200_000  # Total number of network updates to perform
     buffer_capacity = 1_000_000
