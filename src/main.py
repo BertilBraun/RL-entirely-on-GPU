@@ -17,6 +17,31 @@ from algorithms.sac import SAC, AutoAlphaConfig, SACConfig, SACState
 from utils.cartpole_viz import CartPoleLiveVisualizer
 from utils.training_viz import TrainingVisualizer
 
+# ----------------------------
+# Algorithm & training config
+# ----------------------------
+SAC_CONFIG = SACConfig(
+    learning_rate=3e-4,
+    gamma=0.995,
+    tau=0.005,
+    alpha_config=AutoAlphaConfig(min_alpha=0.03),
+    hidden_dims=(128, 128),
+)
+
+NUM_ENVS = 256
+MAX_EPISODE_STEPS = 1000
+TOTAL_UPDATES = 200_000
+BUFFER_CAPACITY = 1_000_000
+BATCH_SIZE = 256
+UPDATES_PER_STEP = NUM_ENVS // 4  # network updates per env step
+NETWORK_UPDATES_PER_GPU_CHUNK = 1000  # updates per GPU-only chunk
+STEPS_PER_GPU_CHUNK = (NETWORK_UPDATES_PER_GPU_CHUNK + UPDATES_PER_STEP - 1) // UPDATES_PER_STEP
+EMA_BETA = 0.01  # smoothing for meters
+
+# Host-side options
+ENABLE_TRAINING_VIZ = True
+ENABLE_LIVE_VIZ = True
+
 
 # ----------------------------
 # Small PyTree dataclasses
@@ -80,49 +105,22 @@ def main():
     print('🚀 Starting JAX-based SAC for Cart-Pole (Chunked GPU Training)')
     print('=' * 70)
 
-    # ----------------------------
-    # Algorithm & training config
-    # ----------------------------
-    sac_cfg = SACConfig(
-        learning_rate=3e-4,
-        gamma=0.995,
-        tau=0.005,
-        alpha_config=AutoAlphaConfig(min_alpha=0.03),
-        hidden_dims=(128, 128),
-    )
-
-    num_envs = 256
-    max_episode_steps = 1000
-    total_updates = 200_000
-    buffer_capacity = 1_000_000
-    batch_size = 256
-    updates_per_step = num_envs // 4  # network updates per env step
-    network_updates_per_gpu_chunk = 1000  # updates per GPU-only chunk
-    steps_per_gpu_chunk = (network_updates_per_gpu_chunk + updates_per_step - 1) // updates_per_step
-    EMA_BETA = 0.01  # smoothing for meters
-
-    # Host-side options
-    enable_training_viz = True
-    enable_live_viz = True
-
     # RNG
     rng = jax.random.PRNGKey(42)
 
     # ----------------------------
     # Env & agent init (host)
     # ----------------------------
-    env = CartPoleEnv(num_envs=num_envs)
-    sac = SAC(obs_dim=env.obs_dim, action_dim=env.action_dim, max_action=env.max_force, config=sac_cfg)
+    env = CartPoleEnv(num_envs=NUM_ENVS)
+    sac = SAC(obs_dim=env.obs_dim, action_dim=env.action_dim, max_action=env.max_force, config=SAC_CONFIG)
 
-    rng, sac_key = jax.random.split(rng)
+    rng, sac_key, buf_key, reset_key = jax.random.split(rng, 4)
     sac_state = sac.init_state(sac_key)
 
-    replay_buffer = ReplayBuffer(capacity=buffer_capacity, obs_dim=env.obs_dim, action_dim=env.action_dim)
-    rng, buf_key = jax.random.split(rng)
+    replay_buffer = ReplayBuffer(capacity=BUFFER_CAPACITY, obs_dim=env.obs_dim, action_dim=env.action_dim)
     buffer_state = replay_buffer.init_buffer_state(buf_key)
 
     # Initial obs/state via functional reset
-    rng, reset_key = jax.random.split(rng)
     obs0, env_state0 = env.reset(reset_key)
 
     train_carry = TrainCarry(
@@ -131,23 +129,23 @@ def main():
         buffer_state=buffer_state,
         env_state=env_state0,
         obs=obs0,
-        env_steps=jnp.zeros(num_envs, dtype=jnp.int32),
-        episode_rewards=jnp.zeros(num_envs, dtype=jnp.float32),
+        env_steps=jnp.zeros(NUM_ENVS, dtype=jnp.int32),
+        episode_rewards=jnp.zeros(NUM_ENVS, dtype=jnp.float32),
         total_updates_done=jnp.array(0, dtype=jnp.int32),
     )
 
     # Viz
-    training_viz = TrainingVisualizer(figsize=(12, 6)) if enable_training_viz else None
+    training_viz = TrainingVisualizer(figsize=(12, 6)) if ENABLE_TRAINING_VIZ else None
     live_viz = (
-        CartPoleLiveVisualizer(num_cartpoles=min(num_envs, 4), length=env.length, rail_limit=env.rail_limit)
-        if enable_live_viz
+        CartPoleLiveVisualizer(num_cartpoles=min(NUM_ENVS, 4), length=env.length, rail_limit=env.rail_limit)
+        if ENABLE_LIVE_VIZ
         else None
     )
 
-    print(f'Environment: {num_envs} cart-pole(s)')
-    print(f'Network: {sac_cfg.hidden_dims} | LR: {sac_cfg.learning_rate}')
-    print(f'Updates: total={total_updates}, per-step={updates_per_step}, per-chunk={network_updates_per_gpu_chunk}')
-    print(f'Max episode steps: {max_episode_steps} | Batch size: {batch_size}')
+    print(f'Environment: {NUM_ENVS} cart-pole(s)')
+    print(f'Network: {SAC_CONFIG.hidden_dims} | LR: {SAC_CONFIG.learning_rate}')
+    print(f'Updates: total={TOTAL_UPDATES}, per-step={UPDATES_PER_STEP}, per-chunk={NETWORK_UPDATES_PER_GPU_CHUNK}')
+    print(f'Max episode steps: {MAX_EPISODE_STEPS} | Batch size: {BATCH_SIZE}')
     print('=' * 70)
 
     # ----------------------------
@@ -155,24 +153,24 @@ def main():
     # ----------------------------
     @jax.jit
     def run_chunk(tc: TrainCarry) -> tuple[TrainCarry, ChunkSummary]:
-        """Runs STEPS_PER_CHUNK env steps and up to CHUNK_UPDATES updates on-device."""
+        """Runs STEPS_PER_GPU_CHUNK env steps and up to NETWORK_UPDATES_PER_GPU_CHUNK updates on-device."""
 
         def one_step(c: ChunkCarry, _) -> tuple[ChunkCarry, None]:
             # RNG splits for action & reset (update splits happen in updates loop)
-            rng, akey, rkey = jax.random.split(c.train.rng, 3)
+            rng, action_selection_key, reset_key = jax.random.split(c.train.rng, 3)
 
             # 1) Action
-            action = sac.select_action_stochastic(c.train.sac_state, c.train.obs, akey)
+            action = sac.select_action_stochastic(c.train.sac_state, c.train.obs, action_selection_key)
 
             # 2) Env step
             next_obs, reward, done, next_env_state = env.step(c.train.env_state, action)
 
             # 3) Auto-reset using provided key
-            reset_obs, reset_state = env.reset(rkey)
+            reset_obs, reset_state = env.reset(reset_key)
 
-            env_steps1 = c.train.env_steps + 1
-            ep_rew1 = c.train.episode_rewards + reward
-            should_reset = jnp.logical_or(done, env_steps1 >= max_episode_steps)
+            next_env_steps = c.train.env_steps + 1
+            next_episode_rewards = c.train.episode_rewards + reward
+            should_reset = jnp.logical_or(done, next_env_steps >= MAX_EPISODE_STEPS)
 
             obs1 = jnp.where(should_reset[..., None], reset_obs, next_obs)
             env_state1 = CartPoleState(
@@ -181,8 +179,8 @@ def main():
                 theta=jnp.where(should_reset[..., None], reset_state.theta, next_env_state.theta),
                 theta_dot=jnp.where(should_reset[..., None], reset_state.theta_dot, next_env_state.theta_dot),
             )
-            env_steps1 = jnp.where(should_reset, 0, env_steps1)
-            ep_rew1 = jnp.where(should_reset, 0.0, ep_rew1)
+            next_env_steps = jnp.where(should_reset, 0, next_env_steps)
+            next_episode_rewards = jnp.where(should_reset, 0.0, next_episode_rewards)
 
             # 4) Add transition to buffer
             trans = Transition(obs=c.train.obs, action=action, reward=reward, next_obs=next_obs, done=done)
@@ -192,7 +190,7 @@ def main():
             def do_update(ucc: UpdateCarry, _) -> tuple[UpdateCarry, None]:
                 next_rng, sk, uk = jax.random.split(ucc.rng, 3)
 
-                batch = ReplayBuffer.sample(ucc.buffer_state, sk, batch_size)
+                batch = ReplayBuffer.sample(ucc.buffer_state, sk, BATCH_SIZE)
                 next_sac_state, info = sac.update_step(ucc.sac_state, batch, uk)
 
                 beta = jnp.asarray(EMA_BETA, jnp.float32)
@@ -219,7 +217,7 @@ def main():
                 alpha_ema=c.alpha_ema,
                 q_ema=c.q_ema,
             )
-            uc_f, _ = jax.lax.scan(do_update, uc0, xs=None, length=updates_per_step)
+            uc_f, _ = jax.lax.scan(do_update, uc0, xs=None, length=UPDATES_PER_STEP)
 
             # Reward EMA across envs
             step_rew_mean = jnp.mean(reward)
@@ -233,8 +231,8 @@ def main():
                     buffer_state=uc_f.buffer_state,
                     env_state=env_state1,
                     obs=obs1,
-                    env_steps=env_steps1,
-                    episode_rewards=ep_rew1,
+                    env_steps=next_env_steps,
+                    episode_rewards=next_episode_rewards,
                     total_updates_done=uc_f.total_updates_done,
                 ),
                 chunk_updates_done=uc_f.chunk_updates_done,
@@ -256,7 +254,7 @@ def main():
             reward_ema=jnp.array(0.0, jnp.float32),
         )
 
-        final_carry, _ = jax.lax.scan(one_step, carry, xs=None, length=steps_per_gpu_chunk)
+        final_carry, _ = jax.lax.scan(one_step, carry, xs=None, length=STEPS_PER_GPU_CHUNK)
 
         summary = ChunkSummary(
             chunk_updates=final_carry.chunk_updates_done,
@@ -274,7 +272,7 @@ def main():
     start_time = time.time()
 
     try:
-        while int(train_carry.total_updates_done) < total_updates:
+        while int(train_carry.total_updates_done) < TOTAL_UPDATES:
             t0 = time.time()
             train_carry, summary = run_chunk(train_carry)  # GPU-only work
 
@@ -283,7 +281,7 @@ def main():
             actor_loss = float(summary.actor_loss)
             critic_loss = float(summary.critic_loss)
             alpha = float(summary.alpha)
-            qval = float(summary.q)
+            q_values = float(summary.q)
             rew = float(summary.reward)
 
             # Host-side viz/log (low frequency)
@@ -292,7 +290,7 @@ def main():
                     actor_loss=actor_loss,
                     critic_loss=critic_loss,
                     alpha=alpha,
-                    q_values=qval,
+                    q_values=q_values,
                     episode_reward=rew,
                 )
                 training_viz.update_plots()
@@ -311,9 +309,9 @@ def main():
             ups = upd / dt if dt > 0 else 0.0
             print(
                 f'+{upd:4d} updates this chunk | {ups:6.1f} upd/s | '
-                f'total {int(train_carry.total_updates_done):6d}/{total_updates} | '
+                f'total {int(train_carry.total_updates_done):6d}/{TOTAL_UPDATES} | '
                 f'actor {actor_loss:.3f} | critic {critic_loss:.3f} | '
-                f'alpha {alpha:.3f} | q {qval:.2f} | r {rew:.2f}'
+                f'alpha {alpha:.3f} | q {q_values:.2f} | r {rew:.2f}'
             )
 
     except KeyboardInterrupt:
