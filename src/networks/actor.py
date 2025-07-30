@@ -91,14 +91,19 @@ class ActorNetwork(nn.Module):
         Returns:
             Log probability of the action
         """
-        # Log probability of Gaussian
-        log_prob = -0.5 * (((raw_action - mu) / jnp.exp(log_std)) ** 2 + 2 * log_std + jnp.log(2 * jnp.pi))
+        # Gaussian log-prob in raw (unsquashed) space
+        inv_std = jnp.exp(-log_std)
+        log_prob = -0.5 * (((raw_action - mu) * inv_std) ** 2 + 2.0 * log_std + jnp.log(2.0 * jnp.pi))
 
-        # Correction for tanh squashing
-        log_prob -= jnp.log(1 - jnp.tanh(raw_action) ** 2 + 1e-6)
+        # Numerically stable tanh correction:
+        # log(1 - tanh(u)^2) = log 4 - softplus(2u) - softplus(-2u)
+        u = raw_action
+        log_det_tanh = jnp.log(4.0) - nn.softplus(2.0 * u) - nn.softplus(-2.0 * u)
+        log_prob = log_prob - log_det_tanh
 
-        # Sum over action dimensions
-        return jnp.sum(log_prob, axis=-1, keepdims=True)
+        # Sum over action dims and account for scaling by max_action (a = max_action * tanh(u))
+        log_prob = jnp.sum(log_prob, axis=-1, keepdims=True) - self.action_dim * jnp.log(self.max_action)
+        return log_prob
 
     def deterministic_action(self, params: chex.ArrayTree, obs: chex.Array, training: bool = False) -> chex.Array:
         """

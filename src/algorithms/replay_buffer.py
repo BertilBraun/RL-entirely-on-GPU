@@ -5,10 +5,10 @@ JAX-based replay buffer implementation.
 import jax
 import chex
 import jax.numpy as jnp
-from typing import NamedTuple
 
 
-class Transition(NamedTuple):
+@chex.dataclass
+class Transition:
     """Single transition for replay buffer."""
 
     obs: chex.Array
@@ -18,7 +18,8 @@ class Transition(NamedTuple):
     done: chex.Array
 
 
-class ReplayBufferState(NamedTuple):
+@chex.dataclass
+class ReplayBufferState:
     """State of the replay buffer."""
 
     data: Transition
@@ -32,7 +33,7 @@ class ReplayBuffer:
     All operations are JIT-compatible.
     """
 
-    def __init__(self, capacity: int, obs_dim: int = 3, action_dim: int = 1):
+    def __init__(self, capacity: int, obs_dim: int, action_dim: int):
         self.capacity = capacity
         self.obs_dim = obs_dim
         self.action_dim = action_dim
@@ -52,34 +53,6 @@ class ReplayBuffer:
 
     @staticmethod
     @jax.jit
-    def add(buffer_state: ReplayBufferState, transition: Transition) -> ReplayBufferState:
-        """
-        Add a transition to the buffer.
-
-        Args:
-            buffer_state: Current buffer state
-            transition: Transition to add
-
-        Returns:
-            Updated buffer state
-        """
-        # Update data at current pointer
-        new_data = Transition(
-            obs=buffer_state.data.obs.at[buffer_state.ptr].set(transition.obs.reshape(-1)),
-            action=buffer_state.data.action.at[buffer_state.ptr].set(transition.action),
-            reward=buffer_state.data.reward.at[buffer_state.ptr].set(transition.reward.reshape(1)),
-            next_obs=buffer_state.data.next_obs.at[buffer_state.ptr].set(transition.next_obs.reshape(-1)),
-            done=buffer_state.data.done.at[buffer_state.ptr].set(transition.done.reshape(1)),
-        )
-
-        # Update pointer and size
-        new_ptr = (buffer_state.ptr + 1) % buffer_state.data.obs.shape[0]
-        new_size = jnp.minimum(buffer_state.size + 1, buffer_state.data.obs.shape[0])
-
-        return ReplayBufferState(data=new_data, size=new_size, ptr=new_ptr)
-
-    @staticmethod
-    @jax.jit
     def add_batch(buffer_state: ReplayBufferState, transitions: Transition) -> ReplayBufferState:
         """
         Add a batch of transitions to the buffer.
@@ -91,53 +64,24 @@ class ReplayBuffer:
         Returns:
             Updated buffer state
         """
-        batch_size = transitions.obs.shape[0]
-        capacity = buffer_state.data.obs.shape[0]
+        batch_size = transitions.obs.shape[0]  # type: ignore
+        capacity = buffer_state.data.obs.shape[0]  # type: ignore
 
-        # Calculate indices where data will be written
-        start_ptr = buffer_state.ptr
-        end_ptr = start_ptr + batch_size
+        # Indices have a compile-time-known length (batch_size), then we shift by the runtime pointer.
+        idx = (jnp.arange(batch_size, dtype=jnp.int32) + buffer_state.ptr) % capacity
 
-        # Handle wrap-around case
-        if end_ptr <= capacity:
-            # No wrap-around
-            new_data = Transition(
-                obs=buffer_state.data.obs.at[start_ptr:end_ptr].set(transitions.obs),
-                action=buffer_state.data.action.at[start_ptr:end_ptr].set(transitions.action),
-                reward=buffer_state.data.reward.at[start_ptr:end_ptr].set(transitions.reward),
-                next_obs=buffer_state.data.next_obs.at[start_ptr:end_ptr].set(transitions.next_obs),
-                done=buffer_state.data.done.at[start_ptr:end_ptr].set(transitions.done),
-            )
-        else:
-            # Wrap-around case
-            first_part_size = capacity - start_ptr
-            second_part_size = batch_size - first_part_size
+        def set_field(buf_arr, new_arr):
+            return buf_arr.at[idx].set(new_arr.reshape(batch_size, -1))
 
-            new_data = Transition(
-                obs=buffer_state.data.obs.at[start_ptr:]
-                .set(transitions.obs[:first_part_size])
-                .at[:second_part_size]
-                .set(transitions.obs[first_part_size:]),
-                action=buffer_state.data.action.at[start_ptr:]
-                .set(transitions.action[:first_part_size])
-                .at[:second_part_size]
-                .set(transitions.action[first_part_size:]),
-                reward=buffer_state.data.reward.at[start_ptr:]
-                .set(transitions.reward[:first_part_size])
-                .at[:second_part_size]
-                .set(transitions.reward[first_part_size:]),
-                next_obs=buffer_state.data.next_obs.at[start_ptr:]
-                .set(transitions.next_obs[:first_part_size])
-                .at[:second_part_size]
-                .set(transitions.next_obs[first_part_size:]),
-                done=buffer_state.data.done.at[start_ptr:]
-                .set(transitions.done[:first_part_size])
-                .at[:second_part_size]
-                .set(transitions.done[first_part_size:]),
-            )
+        new_data = Transition(
+            obs=set_field(buffer_state.data.obs, transitions.obs),
+            action=set_field(buffer_state.data.action, transitions.action),
+            reward=set_field(buffer_state.data.reward, transitions.reward),
+            next_obs=set_field(buffer_state.data.next_obs, transitions.next_obs),
+            done=set_field(buffer_state.data.done, transitions.done),
+        )
 
-        # Update pointer and size
-        new_ptr = end_ptr % capacity
+        new_ptr = (buffer_state.ptr + batch_size) % capacity
         new_size = jnp.minimum(buffer_state.size + batch_size, capacity)
 
         return ReplayBufferState(data=new_data, size=new_size, ptr=new_ptr)
@@ -160,14 +104,14 @@ class ReplayBuffer:
 
         # Extract sampled data
         return Transition(
-            obs=buffer_state.data.obs[indices],
-            action=buffer_state.data.action[indices],
-            reward=buffer_state.data.reward[indices],
-            next_obs=buffer_state.data.next_obs[indices],
-            done=buffer_state.data.done[indices],
+            obs=buffer_state.data.obs[indices],  # type: ignore
+            action=buffer_state.data.action[indices],  # type: ignore
+            reward=buffer_state.data.reward[indices],  # type: ignore
+            next_obs=buffer_state.data.next_obs[indices],  # type: ignore
+            done=buffer_state.data.done[indices],  # type: ignore
         )
 
     @staticmethod
     def can_sample(buffer_state: ReplayBufferState, batch_size: int) -> bool:
         """Check if buffer has enough data to sample."""
-        return buffer_state.size >= batch_size
+        return buffer_state.size >= batch_size  # type: ignore

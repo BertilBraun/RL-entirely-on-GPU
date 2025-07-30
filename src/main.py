@@ -11,8 +11,8 @@ import time
 from tqdm import trange
 
 from environment.cartpole import CartPoleEnv
-from algorithms.replay_buffer import ReplayBuffer
-from algorithms.sac import SAC, SACConfig, SACState, Transition
+from algorithms.replay_buffer import ReplayBuffer, Transition
+from algorithms.sac import SAC, SACConfig, SACState
 from utils.cartpole_viz import CartPoleLiveVisualizer
 from utils.training_viz import TrainingVisualizer
 
@@ -33,8 +33,11 @@ def run_episode(
 
     for step in range(max_steps):
         # Select action
-        key, action_key = jax.random.split(key)
-        action = sac.select_action(sac_state, obs, action_key, deterministic=deterministic)
+        if deterministic:
+            action = sac.select_action_deterministic(sac_state, obs)
+        else:
+            key, action_key = jax.random.split(key)
+            action = sac.select_action_stochastic(sac_state, obs, action_key)
 
         # Take environment step
         next_obs, reward, done, next_env_state = env.step(env_state, action)
@@ -59,15 +62,22 @@ def main():
     print('=' * 50)
 
     # Configuration
-    config = SACConfig(learning_rate=3e-4, gamma=0.99, tau=0.005, alpha=0.2, auto_alpha=True, hidden_dims=(8, 8))
+    config = SACConfig(
+        learning_rate=3e-4,
+        gamma=0.99,
+        tau=0.005,
+        alpha=0.5,
+        auto_alpha=False,  # TODO true?
+        hidden_dims=(32, 32),
+    )
 
     # Environment parameters
-    num_envs = 256
-    max_episode_steps = 250  # TODO increase
-    buffer_capacity = 10000
+    num_envs = 128
+    max_episode_steps = 500  # TODO increase
+    buffer_capacity = num_envs * max_episode_steps * 2  # approximately 2 episodes
     batch_size = 256
-    num_episodes = 10
-    update_freq = num_envs  # must be between 0 and num_envs (the higher, the less frequent the updates)
+    num_episodes = 200
+    update_freq = 1 / 8  # must be between 0 and 1
     eval_freq = 1  # TODO increase
     live_visualization = True
 
@@ -129,32 +139,31 @@ def main():
             # Collect episode data
             for step in trange(max_episode_steps, desc=f'Episode {episode}'):
                 # Select action
-                key, action_key = jax.random.split(key)
-                action = sac.select_action(sac_state, obs, action_key, deterministic=False)
+                action = sac.select_action_deterministic(sac_state, obs)
 
                 # Take environment step
                 next_obs, reward, done, next_env_state = env.step(env_state, action)
 
                 # Store transitions for each environment
-                for env_idx in range(num_envs):
-                    transition = Transition(
-                        obs=obs[env_idx],  # type: ignore
-                        action=action[env_idx],  # type: ignore
-                        reward=reward[env_idx],  # type: ignore
-                        next_obs=next_obs[env_idx],  # type: ignore
-                        done=done[env_idx],  # type: ignore
-                    )
-                    # Add episode transitions to buffer
-                    buffer_state = replay_buffer.add(buffer_state, transition)
+                buffer_state = replay_buffer.add_batch(
+                    buffer_state,
+                    Transition(obs=obs, action=action, reward=reward, next_obs=next_obs, done=done),
+                )
 
                 # Update live visualization during training
                 if live_viz is not None:
                     # Update visualization with current observations
                     live_viz.update(np.array(obs), episode=episode, step=step, rewards=np.array(reward))
 
+                episode_reward += float(jnp.mean(reward))
+
+                # Update for next step
+                obs = next_obs
+                env_state = next_env_state
+
                 # Training updates
                 if replay_buffer.can_sample(buffer_state, batch_size):
-                    for _ in range(num_envs // update_freq):
+                    for _ in range(int(num_envs * update_freq)):
                         key, sample_key = jax.random.split(key)
                         batch = replay_buffer.sample(buffer_state, sample_key, batch_size)
 
@@ -171,12 +180,6 @@ def main():
                                 alpha=float(info.alpha_info.alpha),
                                 q_values=float(info.critic_info.q1_mean),
                             )
-
-                episode_reward += float(jnp.mean(reward))
-
-                # Update for next step
-                obs = next_obs
-                env_state = next_env_state
 
             episode_rewards.append(episode_reward)
 
@@ -232,6 +235,9 @@ def main():
     print('\n📊 Showing visualizations...')
     training_viz.update_plots()
     training_viz.show(block=False)
+
+    # save the training viz
+    training_viz.save('training_viz.png')
 
     # Cleanup
     training_viz.close()

@@ -2,6 +2,7 @@
 Soft Actor-Critic (SAC) algorithm implementation using JAX.
 """
 
+from functools import partial
 import jax
 import jax.numpy as jnp
 import chex
@@ -22,7 +23,7 @@ class SACConfig(NamedTuple):
     alpha: float = 0.2
     target_entropy: float | None = None
     auto_alpha: bool = True
-    hidden_dims: Tuple[int, ...] = (8,)
+    hidden_dims: Tuple[int, ...] = (32, 32)
 
 
 class SACState(NamedTuple):
@@ -89,7 +90,7 @@ class SAC:
 
         # Set target entropy if not provided
         if config.target_entropy is None:
-            self.target_entropy = -action_dim
+            self.target_entropy = -action_dim - action_dim * jnp.log(self.max_action)
         else:
             self.target_entropy = config.target_entropy
 
@@ -116,7 +117,7 @@ class SAC:
 
         actor_params = self.actor.init(key_actor, dummy_obs)
         critic_params = self.critic.init(key_critic, dummy_obs, dummy_action)
-        target_critic_params = critic_params  # Initialize target as copy
+        target_critic_params = jax.tree_util.tree_map(lambda x: x, critic_params)  # Initialize target as copy
 
         # Initialize alpha
         if self.config.auto_alpha:
@@ -149,8 +150,9 @@ class SAC:
     @jax.jit
     def soft_update(target_params: chex.ArrayTree, params: chex.ArrayTree, tau: float) -> chex.ArrayTree:
         """Soft update of target network parameters."""
-        return jax.tree.map(lambda t, p: (1 - tau) * t + tau * p, target_params, params)
+        return jax.tree_util.tree_map(lambda t, p: (1 - tau) * t + tau * p, target_params, params)
 
+    @partial(jax.jit, static_argnums=0)
     def update_step(self, state: SACState, batch: Transition, key: chex.PRNGKey) -> Tuple[SACState, SACInfo]:
         """Single training step."""
         key_critic, key_actor, key_alpha = jax.random.split(key, 3)
@@ -214,15 +216,15 @@ class SAC:
 
         return new_state, info
 
-    def select_action(
-        self, state: SACState, obs: chex.Array, key: chex.PRNGKey, deterministic: bool = False
-    ) -> chex.Array:
-        """Select action given observation."""
-        if deterministic:
-            return self.actor.deterministic_action(state.actor_params, obs)
-        else:
-            action, _ = self.actor.sample_action(state.actor_params, obs, key)
-            return action
+    @partial(jax.jit, static_argnums=0)
+    def select_action_deterministic(self, state: SACState, obs: chex.Array) -> chex.Array:
+        """Select deterministic action given observation."""
+        return self.actor.deterministic_action(state.actor_params, obs)
+
+    @partial(jax.jit, static_argnums=0)
+    def select_action_stochastic(self, state: SACState, obs: chex.Array, key: chex.PRNGKey) -> chex.Array:
+        """Select stochastic action given observation."""
+        return self.actor.sample_action(state.actor_params, obs, key)[0]
 
     def _critic_loss_fn(
         self,
@@ -239,6 +241,9 @@ class SAC:
 
         # Target Q-values
         next_actions, next_log_probs = self.actor.sample_action(actor_params, batch.next_obs, key)
+        # No gradients needed w.r.t. actor when updating critic
+        next_actions = jax.lax.stop_gradient(next_actions)
+        next_log_probs = jax.lax.stop_gradient(next_log_probs)
 
         q1_target, q2_target = self.critic.apply(target_critic_params, batch.next_obs, next_actions)
 
@@ -246,7 +251,8 @@ class SAC:
         q_target = jnp.minimum(q1_target, q2_target)
 
         # Compute target with entropy regularization
-        target_q = batch.reward + self.config.gamma * (1 - batch.done) * (q_target - alpha * next_log_probs)
+        not_done = 1.0 - batch.done.astype(jnp.float32)
+        target_q = batch.reward + self.config.gamma * not_done * (q_target - alpha * next_log_probs)
 
         # Stop gradient on target
         target_q = jax.lax.stop_gradient(target_q)

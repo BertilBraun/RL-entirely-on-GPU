@@ -195,6 +195,20 @@ class CartPoleLiveVisualizer:
             # Draw pendulum bob
             pygame.draw.circle(self.screen, Colors.bob, (bob_screen_x, bob_screen_y), 8)
 
+            # draw observations below the cartpole
+            observations = [
+                f'x: {float(state[0]):.2f}',
+                f'x_dot: {float(state[1]):.2f}',
+                f'cos(theta): {float(state[2]):.2f}',
+                f'sin(theta): {float(state[3]):.2f}',
+                f'theta_dot: {float(state[4]):.2f}',
+            ]
+            obs_y = offset_y + self.center_y + 35
+            for obs in observations:
+                obs_text = self.font.render(obs, True, Colors.text)
+                self.screen.blit(obs_text, (offset_x + self.center_x + 10, obs_y))
+                obs_y += 25
+
         # Draw episode information
         info_y = 10
         info_texts = [
