@@ -101,8 +101,8 @@ class ActorNetwork(nn.Module):
         log_det_tanh = jnp.log(4.0) - nn.softplus(2.0 * u) - nn.softplus(-2.0 * u)
         log_prob = log_prob - log_det_tanh
 
-        # Sum over action dims and account for scaling by max_action (a = max_action * tanh(u))
-        log_prob = jnp.sum(log_prob, axis=-1, keepdims=True) - self.action_dim * jnp.log(self.max_action)
+        # Sum over action dims
+        log_prob = jnp.sum(log_prob, axis=-1, keepdims=True)
         return log_prob
 
     def deterministic_action(self, params: chex.ArrayTree, obs: chex.Array, training: bool = False) -> chex.Array:

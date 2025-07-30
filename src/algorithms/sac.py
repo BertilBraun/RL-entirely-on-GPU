@@ -14,15 +14,26 @@ from networks.critic import DoubleCriticNetwork
 from algorithms.replay_buffer import Transition
 
 
+class AutoAlphaConfig(NamedTuple):
+    """Configuration for auto alpha."""
+
+    min_alpha: float = 0.03
+
+
+class ManualAlphaConfig(NamedTuple):
+    """Configuration for manual alpha."""
+
+    alpha: float = 0.2
+
+
 class SACConfig(NamedTuple):
     """Configuration for SAC algorithm."""
 
     learning_rate: float = 3e-4
     gamma: float = 0.99
     tau: float = 0.005
-    alpha: float = 0.2
+    alpha_config: AutoAlphaConfig | ManualAlphaConfig = AutoAlphaConfig()
     target_entropy: float | None = None
-    auto_alpha: bool = True
     hidden_dims: Tuple[int, ...] = (32, 32)
 
 
@@ -90,9 +101,7 @@ class SAC:
 
         # Set target entropy if not provided
         if config.target_entropy is None:
-            # Fixed: Use a more reasonable target entropy for better exploration
-            # Standard SAC uses -action_dim, but we'll use something less aggressive
-            self.target_entropy = -0.5 * action_dim  # Much less negative = more exploration
+            self.target_entropy = -action_dim
         else:
             self.target_entropy = config.target_entropy
 
@@ -102,9 +111,9 @@ class SAC:
         self.critic = DoubleCriticNetwork(hidden_dims=config.hidden_dims)
 
         # Create optimizers
-        self.actor_optimizer = optax.adam(config.learning_rate)
-        self.critic_optimizer = optax.adam(config.learning_rate)
-        if config.auto_alpha:
+        self.actor_optimizer = optax.chain(optax.clip_by_global_norm(10.0), optax.adam(config.learning_rate))
+        self.critic_optimizer = optax.chain(optax.clip_by_global_norm(10.0), optax.adam(config.learning_rate))
+        if isinstance(config.alpha_config, AutoAlphaConfig):
             self.alpha_optimizer = optax.adam(config.learning_rate)
         else:
             self.alpha_optimizer = None
@@ -122,11 +131,11 @@ class SAC:
         target_critic_params = jax.tree_util.tree_map(lambda x: x, critic_params)  # Initialize target as copy
 
         # Initialize alpha
-        if self.config.auto_alpha:
+        if isinstance(self.config.alpha_config, AutoAlphaConfig):
             log_alpha = jnp.array(0.0)
             alpha = jnp.exp(log_alpha)
         else:
-            alpha = jnp.array(self.config.alpha)
+            alpha = jnp.array(self.config.alpha_config.alpha)
             log_alpha = jnp.log(alpha)
 
         # Initialize optimizers
@@ -185,7 +194,7 @@ class SAC:
         new_alpha_opt_state = state.alpha_opt_state
         alpha_info = AlphaInfo(alpha_loss=jnp.array(0.0), alpha=new_alpha)
 
-        if self.config.auto_alpha and self.alpha_optimizer is not None:
+        if isinstance(self.config.alpha_config, AutoAlphaConfig) and self.alpha_optimizer is not None:
             # Get log probs for alpha update
             _, log_probs = self.actor.sample_action(new_actor_params, batch.obs, key_alpha)
 
@@ -196,7 +205,8 @@ class SAC:
 
             alpha_updates, new_alpha_opt_state = self.alpha_optimizer.update(alpha_grads, state.alpha_opt_state)
             new_log_alpha = optax.apply_updates(state.log_alpha, alpha_updates)
-            new_alpha = jnp.exp(new_log_alpha)
+            new_alpha = jnp.maximum(jnp.exp(new_log_alpha), self.config.alpha_config.min_alpha)
+            new_log_alpha = jnp.log(new_alpha)
 
         # Soft update target critic
         new_target_critic_params = self.soft_update(state.target_critic_params, new_critic_params, self.config.tau)

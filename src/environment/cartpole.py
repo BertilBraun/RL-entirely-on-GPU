@@ -16,7 +16,7 @@ DEFAULT_PARAMS = {
     'max_base_speed': 3.0,
     'max_force': 15.0,
     'rail_limit': 4.0,  # base can move between -4 and 4
-    'theta_damp': 0.05,  # pole rotational damping
+    'theta_damp': 0.00,  # pole rotational damping
 }
 
 
@@ -65,12 +65,6 @@ def cartpole_step(
     theta_dot_new = state.theta_dot + dt * theta_ddot
     theta_new = state.theta + dt * theta_dot_new
 
-    # Simple boundary handling: clip position and zero velocity
-    x_new_clipped = jnp.clip(x_new, -rail_limit, rail_limit)
-    clipped = x_new_clipped != x_new
-    x_new = x_new_clipped
-    x_dot_new = jnp.where(clipped, jnp.zeros_like(x_dot_new), x_dot_new)
-
     # Wrap angle to [-pi, pi]
     theta_new = jnp.mod(theta_new + jnp.pi, 2.0 * jnp.pi) - jnp.pi
 
@@ -97,13 +91,16 @@ def reward_fn(state: CartPoleState, force: chex.Array, length: float, rail_limit
     """
     Smooth reward favoring upright pole, small velocities, and gentle control.
     """
+    upright = 3.0 * jnp.exp(-(state.theta**2) / (0.12**2))  # Large reward for pole being upright
+
     r = (
         jnp.cos(state.theta)
+        + upright  # Large reward for pole being upright
+        - 0.05 * (state.x**2)
         - 0.01 * (state.theta_dot**2)
-        - 0.01 * (state.x**2 + state.x_dot**2)
+        - 0.01 * (state.x_dot**2)
         - 1e-4 * (force**2)
-        + jnp.where(jnp.cos(state.theta) > 0.99, 10, 0)  # Large reward for pole being upright
-        - jnp.where(jnp.abs(state.x) >= rail_limit - 0.5, 10, 0)  # Large penalty for hitting the boundary
+        - jnp.where(jnp.abs(state.x) >= rail_limit - 0.5, 2, 0)  # penalty for hitting the boundary
     )
     return r.squeeze(-1)
 

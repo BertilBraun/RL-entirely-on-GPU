@@ -11,7 +11,7 @@ from tqdm import trange
 
 from environment.cartpole import CartPoleEnv
 from algorithms.replay_buffer import ReplayBuffer, Transition
-from algorithms.sac import SAC, SACConfig
+from algorithms.sac import SAC, AutoAlphaConfig, SACConfig
 from utils.cartpole_viz import CartPoleLiveVisualizer
 from utils.training_viz import TrainingVisualizer
 
@@ -23,24 +23,21 @@ def main():
 
     # Configuration
     config = SACConfig(
-        learning_rate=1e-3,
-        gamma=0.9995,
+        learning_rate=3e-4,
+        gamma=0.995,
         tau=0.005,
-        alpha=0.4,
-        auto_alpha=False,  # TODO true?
-        hidden_dims=(32, 32),
+        alpha_config=AutoAlphaConfig(min_alpha=0.03),
+        hidden_dims=(128, 128),
     )
 
     # Training parameters
-    num_envs = 256
+    num_envs = 32
     max_episode_steps = 1000
-    total_updates = 50000  # Total number of network updates to perform
-    buffer_capacity = num_envs * max_episode_steps * 2
+    total_updates = 200_000  # Total number of network updates to perform
+    buffer_capacity = 1_000_000
     batch_size = 256
-    updates_per_step = 1  # Network updates per environment step
+    updates_per_step = num_envs // 4  # Network updates per environment step
     live_visualization = True
-
-    total_updates = 2_000_000  # TODO remove
 
     # Initialize random key
     key = jax.random.PRNGKey(42)
