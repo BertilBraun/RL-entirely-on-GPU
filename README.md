@@ -2,7 +2,7 @@
 
 A **from-scratch implementation** of Soft Actor-Critic (SAC) using **pure JAX** for fully GPU-resident reinforcement learning. This project demonstrates a complete RL pipeline that achieves **100% GPU utilization** and **5200+ updates per second** with truly parallel environments and zero host-device transfers during training.
 
-![JAX](https://img.shields.io/badge/JAX-Enabled-orange)
+![JAX](https://img.shields.io/badge/JAX-Enabled-green)
 ![GPU](https://img.shields.io/badge/GPU-Accelerated-green)
 ![SAC](https://img.shields.io/badge/Algorithm-SAC-blue)
 
@@ -40,12 +40,12 @@ We benchmarked the system with different environment counts to demonstrate GPU s
 
 ![Performance Benchmarks](documentation/performance_benchmarks.png)
 
-| Implementation            | Hardware                   | Updates/Second | GPU Usage | Speedup |
-| ------------------------- | -------------------------- | -------------- | --------- | ------- |
-| **CPU No JAX (Legacy)**   | Various CPUs               | **342**        | 0%        | 1.0x    |
-| **CPU Full JAX (Modern)** | Modern CPU                 | **650**        | 0%        | 1.9x    |
-| **CPU Full JAX (Node)**   | Xeon E5-1630 v4            | **190**        | 0%        | 0.6x    |
-| **GPU Full JAX (Node)**   | RTX 3060 + Xeon E5-1630 v4 | **5,248**      | 100%      | 15.3x   |
+| Implementation   | Hardware                | Updates/Second | GPU Usage | Speedup                              |
+| ---------------- | ----------------------- | -------------- | --------- | ------------------------------------ |
+| **CPU No JAX**   | i7-11370H               | **342**        | 0%        | 1.0x                                 |
+| **CPU Full JAX** | i7-11370H               | **650**        | 0%        | 1.9x                                 |
+| **CPU Full JAX** | Xeon E5-1630            | **190**        | 0%        | 0.6x                                 |
+| **GPU Full JAX** | RTX 3060 + Xeon E5-1630 | **5,248**      | 100%      | 27.6x over Full JAX on same hardware |
 
 ### 📈 Performance Insights
 
@@ -84,6 +84,8 @@ git clone https://github.com/BertilBraun/RL-entirely-on-GPU.git
 cd RL-entirely-on-GPU
 
 # Install dependencies
+# With GPU support
+pip install jax[cuda12]
 pip install -r requirements.txt
 ```
 
@@ -127,21 +129,7 @@ SAC_CONFIG = SACConfig(
 
 The agent learns to balance the CartPole effectively across all environments:
 
-### Typical Training Progression (1024 Environments)
-
-```
-🚀 Starting JAX-based SAC for Cart-Pole (Chunked GPU Training)
-======================================================================
-Environment: 1024 cart-pole(s)
-Network: (128, 128) | LR: 0.0003
-Updates: total=200000, per-step=256, per-chunk=4
-Max episode steps: 1000 | Batch size: 256
-======================================================================
-
-+1024 updates this chunk | 5248.7 upd/s | total   4096/200000 | actor 7.419 | critic 0.011 | alpha 0.365 | q -7.63 | r -0.03
-+1024 updates this chunk | 5229.9 upd/s | total   5120/200000 | actor 11.322 | critic 0.014 | alpha 0.289 | q -11.48 | r -0.03
-+1024 updates this chunk | 5216.5 upd/s | total   6144/200000 | actor 15.741 | critic 0.014 | alpha 0.230 | q -15.86 | r -0.04
-```
+![Training Results](documentation/training_viz.png)
 
 ### Key Metrics
 
