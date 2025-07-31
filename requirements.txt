@@ -1,4 +1,4 @@
-jax[cpu]
+jax
 jaxlib
 flax
 optax
