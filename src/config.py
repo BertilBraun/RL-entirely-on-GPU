@@ -8,7 +8,7 @@ from algorithms.sac import AutoAlphaConfig, SACConfig
 # Algorithm & training config
 # ----------------------------
 # Environment settings
-NUM_ENVS = 32
+NUM_ENVS = 128
 MAX_EPISODE_STEPS = 1000
 USE_DOUBLE_PENDULUM = True  # Set to True for double pendulum, False for single pendulum
 
@@ -26,7 +26,7 @@ SAC_CONFIG = SACConfig(
     gamma=0.995,
     tau=0.005,
     alpha_config=AutoAlphaConfig(min_alpha=0.03),
-    hidden_dims=(128, 128) if not USE_DOUBLE_PENDULUM else (256, 256, 256),
+    hidden_dims=(128, 128) if not USE_DOUBLE_PENDULUM else (128, 128, 128),
 )
 
 

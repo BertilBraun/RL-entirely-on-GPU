@@ -49,28 +49,28 @@ class ChunkTrainer:
         summary = ChunkSummary.from_carry(final_carry)
         return final_carry.train, summary
 
-    def _one_step(self, c: ChunkCarry, _) -> Tuple[ChunkCarry, None]:
+    def _one_step(self, carry: ChunkCarry, _) -> Tuple[ChunkCarry, None]:
         """Execute one environment step with updates."""
         # Split RNG for different operations
-        rng, action_key, reset_key = jax.random.split(c.train.rng, 3)
+        rng, action_key, reset_key = jax.random.split(carry.train.rng, 3)
 
         # Environment interaction
-        action = self.sac.select_action_stochastic(c.train.sac_state, c.train.obs, action_key)
-        next_obs, reward, done, next_env_state = self.env.step(c.train.env_state, action)
+        action = self.sac.select_action_stochastic(carry.train.sac_state, carry.train.obs, action_key)
+        next_obs, reward, done, next_env_state = self.env.step(carry.train.env_state, action)
 
         # Handle episode termination and reset
         env_state_after_reset, obs_after_reset, env_steps_after_reset, rewards_after_reset = self._handle_episode_reset(
-            c, next_obs, next_env_state, reward, done, reset_key
+            carry, next_obs, next_env_state, reward, done, reset_key
         )
 
         # Store transition in replay buffer
-        transition = Transition(obs=c.train.obs, action=action, reward=reward, next_obs=next_obs, done=done)
-        buffer_state_updated = ReplayBuffer.add_batch(c.train.buffer_state, transition)
+        transition = Transition(obs=carry.train.obs, action=action, reward=reward, next_obs=next_obs, done=done)
+        buffer_state_updated = ReplayBuffer.add_batch(carry.train.buffer_state, transition)
 
         # Parameter updates
         updated_carry = self._perform_parameter_updates(
             rng,
-            c,
+            carry,
             buffer_state_updated,
             env_state_after_reset,
             obs_after_reset,
@@ -83,7 +83,7 @@ class ChunkTrainer:
 
     def _handle_episode_reset(
         self,
-        c: ChunkCarry,
+        carry: ChunkCarry,
         next_obs: chex.Array,
         next_env_state: EnvStateType,
         reward: chex.Array,
@@ -93,28 +93,29 @@ class ChunkTrainer:
         """Handle episode termination and environment reset."""
         reset_obs, reset_state = self.env.reset(reset_key)
 
-        next_env_steps = c.train.env_steps + 1
-        next_episode_rewards = c.train.episode_rewards + reward
+        next_env_steps = carry.train.env_steps + 1
+        next_episode_rewards = carry.train.episode_rewards + reward
         should_reset = done | (next_env_steps >= self.max_episode_steps)
 
+        # NOTE: for some reason, [..., None] is needed just here
         obs_after_reset = jnp.where(should_reset[..., None], reset_obs, next_obs)
 
         # Handle state reset based on environment type
         if isinstance(next_env_state, DoublePendulumCartPoleState):
             env_state_after_reset = DoublePendulumCartPoleState(
-                x=jnp.where(should_reset[..., None], reset_state.x, next_env_state.x),
-                x_dot=jnp.where(should_reset[..., None], reset_state.x_dot, next_env_state.x_dot),
-                theta1=jnp.where(should_reset[..., None], reset_state.theta1, next_env_state.theta1),
-                theta1_dot=jnp.where(should_reset[..., None], reset_state.theta1_dot, next_env_state.theta1_dot),
-                theta2=jnp.where(should_reset[..., None], reset_state.theta2, next_env_state.theta2),
-                theta2_dot=jnp.where(should_reset[..., None], reset_state.theta2_dot, next_env_state.theta2_dot),
+                x=jnp.where(should_reset, reset_state.x, next_env_state.x),
+                x_dot=jnp.where(should_reset, reset_state.x_dot, next_env_state.x_dot),
+                theta1=jnp.where(should_reset, reset_state.theta1, next_env_state.theta1),
+                theta1_dot=jnp.where(should_reset, reset_state.theta1_dot, next_env_state.theta1_dot),
+                theta2=jnp.where(should_reset, reset_state.theta2, next_env_state.theta2),
+                theta2_dot=jnp.where(should_reset, reset_state.theta2_dot, next_env_state.theta2_dot),
             )
         else:
             env_state_after_reset = CartPoleState(
-                x=jnp.where(should_reset[..., None], reset_state.x, next_env_state.x),
-                x_dot=jnp.where(should_reset[..., None], reset_state.x_dot, next_env_state.x_dot),
-                theta=jnp.where(should_reset[..., None], reset_state.theta, next_env_state.theta),
-                theta_dot=jnp.where(should_reset[..., None], reset_state.theta_dot, next_env_state.theta_dot),
+                x=jnp.where(should_reset, reset_state.x, next_env_state.x),
+                x_dot=jnp.where(should_reset, reset_state.x_dot, next_env_state.x_dot),
+                theta=jnp.where(should_reset, reset_state.theta, next_env_state.theta),
+                theta_dot=jnp.where(should_reset, reset_state.theta_dot, next_env_state.theta_dot),
             )
         env_steps_after_reset = jnp.where(should_reset, 0, next_env_steps)
         rewards_after_reset = jnp.where(should_reset, 0.0, next_episode_rewards)
@@ -124,7 +125,7 @@ class ChunkTrainer:
     def _perform_parameter_updates(
         self,
         rng: chex.PRNGKey,
-        c: ChunkCarry,
+        carry: ChunkCarry,
         buffer_state: ReplayBufferState,
         env_state: EnvStateType,
         obs: chex.Array,
@@ -134,14 +135,14 @@ class ChunkTrainer:
     ) -> ChunkCarry:
         """Perform SAC parameter updates and update EMAs."""
         # Initialize update carry
-        uc0 = UpdateCarry.init(c, rng, buffer_state)
+        uc0 = UpdateCarry.init(carry, rng, buffer_state)
 
         # Run parameter updates
         uc_final, _ = jax.lax.scan(self._single_update, uc0, xs=None, length=self.updates_per_step)
 
         # Update reward EMA
         step_reward_mean = jnp.mean(step_reward)
-        reward_ema_updated = (1 - self.reward_ema_beta) * c.reward_ema + self.reward_ema_beta * step_reward_mean
+        reward_ema_updated = (1 - self.reward_ema_beta) * carry.reward_ema + self.reward_ema_beta * step_reward_mean
 
         # Create updated carry
         return ChunkCarry(

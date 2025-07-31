@@ -52,6 +52,7 @@ def setup_environment_and_agent(rng: jax.Array) -> TrainingSetup:
 
     rng, sac_key, buf_key, reset_key = jax.random.split(rng, 4)
     sac_state = sac.init_state(sac_key)
+    sac_state = sac_state.try_load()
 
     replay_buffer = ReplayBuffer(capacity=BUFFER_CAPACITY, obs_dim=env.obs_dim, action_dim=env.action_dim)
     buffer_state = replay_buffer.init_buffer_state(buf_key)
@@ -79,7 +80,10 @@ def setup_visualizers(env: EnvType) -> Tuple[Optional[TrainingVisualizer], Optio
         if USE_DOUBLE_PENDULUM:
             assert isinstance(env, DoublePendulumCartPoleEnv)
             live_viz = DoublePendulumCartPoleLiveVisualizer(
-                num_cartpoles=min(NUM_ENVS, 4), length1=env.length1, length2=env.length2, rail_limit=env.rail_limit
+                num_cartpoles=min(NUM_ENVS, 4),
+                length1=env.params.length1,
+                length2=env.params.length2,
+                rail_limit=env.rail_limit,
             )
         else:
             assert isinstance(env, CartPoleEnv)
@@ -150,6 +154,8 @@ def run_training_loop(
                 f'alpha {metrics.alpha:.3f} | q {metrics.q_values:.2f} | r {metrics.reward:.2f}'
             )
 
+            train_carry.sac_state.save_model(int(train_carry.total_updates_done))
+
     except KeyboardInterrupt:
         print('\n⏸️  Training interrupted by user')
 
@@ -190,8 +196,8 @@ def run_pendulums_viz(rng: chex.PRNGKey, sac: SAC, sac_state: SACState) -> None:
         env = DoublePendulumCartPoleEnv(num_envs=4)
         live_viz = DoublePendulumCartPoleLiveVisualizer(
             num_cartpoles=env.num_envs,
-            length1=env.length1,
-            length2=env.length2,
+            length1=env.params.length1,
+            length2=env.params.length2,
             rail_limit=env.rail_limit,
             should_save=True,
         )

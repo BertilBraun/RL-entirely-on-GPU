@@ -58,13 +58,13 @@ class Params:
 # -------------------------------
 
 
-def _lagrangian(q: chex.Array, v: chex.Array, params: Params) -> chex.Array:
+def _lagrangian(positions: chex.Array, velocities: chex.Array, params: Params) -> chex.Array:
     """
     q = [x, th1, th2], v = [xd, th1d, th2d]
     Angles measured from upright (0 = up). Positive y downward.
     """
-    x, th1, th2 = q
-    xd, th1d, th2d = v
+    x, th1, th2 = positions  # type: ignore
+    xd, th1d, th2d = velocities  # type: ignore
     l1, l2 = params.length1, params.length2
     m1, m2, M = params.m1, params.m2, params.M
     g = params.g
@@ -87,36 +87,37 @@ def _lagrangian(q: chex.Array, v: chex.Array, params: Params) -> chex.Array:
     return T - V  # L = T - V
 
 
-def _generalized_forces(v: chex.Array, params: Params, force: chex.Array) -> chex.Array:
+def _generalized_forces(velocities: chex.Array, params: Params, force: chex.Array) -> chex.Array:
     """Q = [Fx_on_cart, τ1, τ2] with joint Rayleigh damping."""
-    xd, th1d, th2d = v
+    xd, th1d, th2d = velocities  # type: ignore
     # Cart actuation (force along x), viscous damping at joints
     return jnp.array([force, -params.theta_damp1 * th1d, -params.theta_damp2 * th2d])
 
 
-def _accelerations_single(q: chex.Array, v: chex.Array, params: Params, force: chex.Array) -> chex.Array:
+def _accelerations_single(
+    positions: chex.Array, velocities: chex.Array, params: Params, force: chex.Array
+) -> chex.Array:
     """
     Returns vdot solving:  d/dt(∂L/∂v) - ∂L/∂q = Q  ⇒  M(q) vdot = Q + ∂L/∂q - (∂/∂q ∂L/∂v) v
     """
     # Gradients
-    dLdq = jax.grad(_lagrangian, argnums=0)(q, v, params)  # ∂L/∂q
-    dLdv = jax.grad(_lagrangian, argnums=1)(q, v, params)  # ∂L/∂v
+    dLdq = jax.grad(_lagrangian, argnums=0)(positions, velocities, params)  # ∂L/∂q
 
     # Mass matrix M(q) = ∂/∂v (∂L/∂v)
-    Mmat = jax.jacfwd(lambda vv: jax.grad(_lagrangian, 1)(q, vv, params))(v)
+    Mmat = jax.jacfwd(lambda vv: jax.grad(_lagrangian, 1)(positions, vv, params))(velocities)
 
     # C(q,v) v term = (∂/∂q ∂L/∂v) v
-    C_times_v = jax.jacfwd(lambda qq: jax.grad(_lagrangian, 1)(qq, v, params))(q) @ v
+    C_times_v = jax.jacfwd(lambda qq: jax.grad(_lagrangian, 1)(qq, velocities, params))(positions) @ velocities
 
-    Q = _generalized_forces(v, params, force)
+    Q = _generalized_forces(velocities, params, force)
 
     rhs = Q + dLdq - C_times_v
     vdot = jnp.linalg.solve(Mmat, rhs)  # stable, no explicit inverse
     return vdot
 
 
-def _wrap_angle(a: chex.Array) -> chex.Array:
-    return (a + jnp.pi) % (2.0 * jnp.pi) - jnp.pi
+def _wrap_angle(angle: chex.Array) -> chex.Array:
+    return (angle + jnp.pi) % (2.0 * jnp.pi) - jnp.pi
 
 
 def _step_single(
@@ -134,16 +135,16 @@ def _step_single(
       v_{t+1} = v_t + dt * vdot(q_t, v_t)
       q_{t+1} = q_t + dt * v_{t+1}
     """
-    q = jnp.array([x, theta1, theta2])
-    v = jnp.array([x_dot, theta1_dot, theta2_dot])
+    positions = jnp.array([x, theta1, theta2])
+    velocities = jnp.array([x_dot, theta1_dot, theta2_dot])
 
-    vdot = _accelerations_single(q, v, params, force)
+    vdot = _accelerations_single(positions, velocities, params, force)
 
-    v_new = v + params.dt * vdot
-    q_new = q + params.dt * v_new
+    velocities_new = velocities + params.dt * vdot
+    positions_new = positions + params.dt * velocities_new
 
-    x_new, th1_new, th2_new = q_new
-    xd_new, th1d_new, th2d_new = v_new
+    x_new, th1_new, th2_new = positions_new
+    xd_new, th1d_new, th2d_new = velocities_new
 
     return DoublePendulumCartPoleState(
         x=x_new,
@@ -176,145 +177,24 @@ def make_batched_step(
     # Vectorize _step_single over the leading axis
     vmap_step = jax.vmap(
         _step_single,
-        in_axes=(
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            None,
-        ),
+        in_axes=(0, 0, 0, 0, 0, 0, 0, None),
     )
 
     # JIT compile; donate state to reduce memory traffic
     @jax.jit
     def step_batched(state: DoublePendulumCartPoleState, force: chex.Array) -> DoublePendulumCartPoleState:
-        num_envs = state.x.shape[0]
-        res = vmap_step(
-            state.x.reshape(num_envs),
-            state.x_dot.reshape(num_envs),
-            state.theta1.reshape(num_envs),
-            state.theta1_dot.reshape(num_envs),
-            state.theta2.reshape(num_envs),
-            state.theta2_dot.reshape(num_envs),
-            force.reshape(num_envs),
+        return vmap_step(
+            state.x,
+            state.x_dot,
+            state.theta1,
+            state.theta1_dot,
+            state.theta2,
+            state.theta2_dot,
+            force,
             params,
         )
 
-        return DoublePendulumCartPoleState(
-            x=res.x.reshape(num_envs, 1),
-            x_dot=res.x_dot.reshape(num_envs, 1),
-            theta1=res.theta1.reshape(num_envs, 1),
-            theta1_dot=res.theta1_dot.reshape(num_envs, 1),
-            theta2=res.theta2.reshape(num_envs, 1),
-            theta2_dot=res.theta2_dot.reshape(num_envs, 1),
-        )
-
     return step_batched
-
-
-@jax.jit
-def double_pendulum_cartpole_step(
-    state: DoublePendulumCartPoleState,
-    force: chex.Array,
-    dt: float,
-    g: float,
-    length1: float,
-    length2: float,
-    m1: float,
-    m2: float,
-    M: float,
-    rail_limit: float,
-    theta_damp1: float,
-    theta_damp2: float,
-) -> DoublePendulumCartPoleState:
-    """
-    Double pendulum on cart dynamics with complex coupled equations.
-    Based on Lagrangian mechanics for double pendulum on movable cart.
-    """
-    # Extract current state
-    x, x_dot = state.x, state.x_dot
-    theta1, theta1_dot = state.theta1, state.theta1_dot
-    theta2, theta2_dot = state.theta2, state.theta2_dot
-
-    # Trigonometric terms
-    cos1 = jnp.cos(theta1)
-    sin1 = jnp.sin(theta1)
-    cos2 = jnp.cos(theta2)
-    sin2 = jnp.sin(theta2)
-    cos12 = jnp.cos(jnp.subtract(theta1, theta2))
-    sin12 = jnp.sin(jnp.subtract(theta1, theta2))
-
-    # Total mass
-    total_mass = M + m1 + m2
-
-    # Mass matrix elements (for the system: [x_ddot, theta1_ddot, theta2_ddot])
-    # M11 = total_mass
-    M12 = (m1 + m2) * length1 * cos1
-    M13 = m2 * length2 * cos2
-    # M21 = (m1 + m2) * length1 * cos1
-    M22 = (m1 + m2) * length1**2
-    M23 = m2 * length1 * length2 * cos12
-    # M31 = m2 * length2 * cos2
-    M32 = m2 * length1 * length2 * cos12
-    M33 = m2 * length2**2
-
-    # Right hand side vector elements
-    # Gravitational and centrifugal terms
-    f1 = force + (m1 + m2) * length1 * theta1_dot**2 * sin1 + m2 * length2 * theta2_dot**2 * sin2
-    f2 = (m1 + m2) * g * length1 * sin1 + m2 * length1 * length2 * theta2_dot**2 * sin12
-    f3 = m2 * g * length2 * sin2 - m2 * length1 * length2 * theta1_dot**2 * sin12
-
-    # Apply damping
-    f2 -= theta_damp1 * theta1_dot * (m1 + m2) * length1**2
-    f3 -= theta_damp2 * theta2_dot * m2 * length2**2
-
-    # Solve the linear system M * [x_ddot, theta1_ddot, theta2_ddot]^T = [f1, f2, f3]^T
-    # Using manual inversion of 3x3 matrix for efficiency
-
-    # Determinant of mass matrix
-    det = total_mass * M22 * M33 + M12 * M23 * M13 * 2 - total_mass * M23**2 - M12**2 * M33 - M13**2 * M22
-
-    # Inverse mass matrix elements (only what we need)
-    inv_M11 = (M22 * M33 - M23**2) / det
-    inv_M12 = (M13 * M23 - M12 * M33) / det
-    inv_M13 = (M12 * M23 - M13 * M22) / det
-    inv_M21 = inv_M12  # Symmetric
-    inv_M22 = (total_mass * M33 - M13**2) / det
-    inv_M23 = (M12 * M13 - total_mass * M23) / det
-    inv_M31 = inv_M13  # Symmetric
-    inv_M32 = inv_M23  # Symmetric
-    inv_M33 = (total_mass * M22 - M12**2) / det
-
-    # Compute accelerations
-    x_ddot = inv_M11 * f1 + inv_M12 * f2 + inv_M13 * f3
-    theta1_ddot = inv_M21 * f1 + inv_M22 * f2 + inv_M23 * f3
-    theta2_ddot = inv_M31 * f1 + inv_M32 * f2 + inv_M33 * f3
-
-    # Semi-implicit Euler integration
-    x_dot_new = x_dot + dt * x_ddot
-    x_new = x + dt * x_dot_new
-
-    theta1_dot_new = theta1_dot + dt * theta1_ddot
-    theta1_new = theta1 + dt * theta1_dot_new
-
-    theta2_dot_new = theta2_dot + dt * theta2_ddot
-    theta2_new = theta2 + dt * theta2_dot_new
-
-    # Wrap angles to [-pi, pi]
-    theta1_new = jnp.mod(theta1_new + jnp.pi, 2.0 * jnp.pi) - jnp.pi
-    theta2_new = jnp.mod(theta2_new + jnp.pi, 2.0 * jnp.pi) - jnp.pi
-
-    return DoublePendulumCartPoleState(
-        x=x_new,
-        x_dot=x_dot_new,
-        theta1=theta1_new,
-        theta1_dot=theta1_dot_new,
-        theta2=theta2_new,
-        theta2_dot=theta2_dot_new,
-    )
 
 
 @jax.jit
@@ -324,7 +204,7 @@ def get_obs(
     """
     Observation: [x, x_dot, cos(theta1), sin(theta1), theta1_dot, cos(theta2), sin(theta2), theta2_dot]
     """
-    return jnp.concatenate(
+    return jnp.stack(
         [
             state.x / rail_limit,  # Normalize position to [-1, 1]
             state.x_dot / max_base_speed,  # Normalize base velocity to [-1, 1]
@@ -335,7 +215,7 @@ def get_obs(
             jnp.sin(state.theta2),  # Sine of second pendulum angle
             state.theta2_dot / max_speed,  # Normalize second pendulum angular velocity
         ],
-        axis=-1,
+        axis=1,
     )
 
 
@@ -375,7 +255,7 @@ def reward_fn(
         - boundary_penalty
     )
 
-    return r.squeeze(-1)
+    return r
 
 
 @jax.jit
@@ -409,38 +289,29 @@ class DoublePendulumCartPoleEnv:
     ) -> None:
         assert num_envs > 0, 'num_envs must be at least 1'
 
+        # Action and observation spaces
+        self.action_dim = 1  # Force applied to cart
+        self.obs_dim = 8  # [x, x_dot, cos(theta1), sin(theta1), theta1_dot, cos(theta2), sin(theta2), theta2_dot]
+
         self.num_envs = num_envs
         self.max_base_speed = max_base_speed
         self.max_speed = max_speed
         self.max_force = max_force
         self.rail_limit = rail_limit
-        self.dt = dt
-        self.g = g
-        self.length1 = length1
-        self.length2 = length2
-        self.m1 = m1
-        self.m2 = m2
-        self.M = M
-        self.theta_damp1 = theta_damp1
-        self.theta_damp2 = theta_damp2
 
-        # Action and observation spaces
-        self.action_dim = 1  # Force applied to cart
-        self.obs_dim = 8  # [x, x_dot, cos(theta1), sin(theta1), theta1_dot, cos(theta2), sin(theta2), theta2_dot]
-
-        self._step = make_batched_step(
-            Params(
-                dt=self.dt,
-                g=self.g,
-                length1=self.length1,
-                length2=self.length2,
-                m1=self.m1,
-                m2=self.m2,
-                M=self.M,
-                theta_damp1=self.theta_damp1,
-                theta_damp2=self.theta_damp2,
-            )
+        self.params = Params(
+            dt=dt,
+            g=g,
+            length1=length1,
+            length2=length2,
+            m1=m1,
+            m2=m2,
+            M=M,
+            theta_damp1=theta_damp1,
+            theta_damp2=theta_damp2,
         )
+
+        self._step = make_batched_step(self.params)
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, reset_key: chex.PRNGKey) -> Tuple[chex.Array, DoublePendulumCartPoleState]:
@@ -453,16 +324,16 @@ class DoublePendulumCartPoleEnv:
         k1, k2, k3, k4, k5, k6 = jax.random.split(reset_key, 6)
 
         # Initialize cart position and velocity
-        x = rand((self.num_envs, 1), -1.0, 1.0, k1)
-        x_dot = rand((self.num_envs, 1), -0.5, 0.5, k2)
+        x = rand((self.num_envs,), -1.0, 1.0, k1)
+        x_dot = rand((self.num_envs,), -0.5, 0.5, k2)
 
         # Initialize first pendulum (hanging down to slightly off vertical)
-        theta1 = rand((self.num_envs, 1), -jnp.pi, jnp.pi, k3)
-        theta1_dot = rand((self.num_envs, 1), -0.5, 0.5, k4)
+        theta1 = rand((self.num_envs,), -jnp.pi, jnp.pi, k3)
+        theta1_dot = rand((self.num_envs,), -0.5, 0.5, k4)
 
         # Initialize second pendulum (hanging down to slightly off vertical)
-        theta2 = rand((self.num_envs, 1), -jnp.pi, jnp.pi, k5)
-        theta2_dot = rand((self.num_envs, 1), -0.5, 0.5, k6)
+        theta2 = rand((self.num_envs,), -jnp.pi, jnp.pi, k5)
+        theta2_dot = rand((self.num_envs,), -0.5, 0.5, k6)
 
         state = DoublePendulumCartPoleState(
             x=x,
@@ -481,27 +352,11 @@ class DoublePendulumCartPoleEnv:
     ) -> Tuple[chex.Array, chex.Array, chex.Array, DoublePendulumCartPoleState]:
         """Step environment(s) forward."""
         # Clip action to valid range
-        action = jnp.asarray(action).reshape(self.num_envs, 1)
+        action = jnp.asarray(action).reshape(self.num_envs)
         force = jnp.clip(action, -self.max_force, self.max_force)
 
         # Physics step
-        if False:
-            next_state = double_pendulum_cartpole_step(
-                state=state,
-                force=force,
-                dt=self.dt,
-                g=self.g,
-                length1=self.length1,
-                length2=self.length2,
-                m1=self.m1,
-                m2=self.m2,
-                M=self.M,
-                rail_limit=self.rail_limit,
-                theta_damp1=self.theta_damp1,
-                theta_damp2=self.theta_damp2,
-            )
-        else:
-            next_state = self._step(state, force)
+        next_state = self._step(state, force)
 
         # Clip velocities (safety caps)
         next_state = DoublePendulumCartPoleState(
@@ -517,7 +372,7 @@ class DoublePendulumCartPoleEnv:
         done = is_done(next_state, self.rail_limit)
 
         # Reward & outputs
-        reward = reward_fn(state, force, self.length1, self.length2, self.rail_limit)
+        reward = reward_fn(state, force, self.params.length1, self.params.length2, self.rail_limit)
         next_obs = get_obs(next_state, self.rail_limit, self.max_base_speed, self.max_speed)
 
         return next_obs, reward, done, next_state

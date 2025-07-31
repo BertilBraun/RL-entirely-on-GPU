@@ -2,12 +2,15 @@
 Soft Actor-Critic (SAC) algorithm implementation using JAX.
 """
 
+from __future__ import annotations
+
 from functools import partial
 import jax
 import jax.numpy as jnp
 import chex
 import optax
 from typing import NamedTuple, Tuple
+
 
 from networks.actor import ActorNetwork
 from networks.critic import DoubleCriticNetwork
@@ -49,6 +52,18 @@ class SACState(NamedTuple):
     actor_opt_state: chex.ArrayTree
     critic_opt_state: chex.ArrayTree
     alpha_opt_state: chex.ArrayTree | None = None
+
+    def save_model(self, step: int) -> None:
+        """Save model parameters."""
+        # save
+        # from flax.training import checkpoints
+        # checkpoints.save_checkpoint(ckpt_dir, self, step, overwrite=True)
+
+    def try_load(self) -> SACState:
+        """Try to load model parameters."""
+        # from flax.training import checkpoints
+        # return checkpoints.restore_checkpoint(ckpt_dir, target=self)
+        return self
 
 
 @chex.dataclass
@@ -236,7 +251,7 @@ class SAC:
     @partial(jax.jit, static_argnums=0)
     def select_action_stochastic(self, state: SACState, obs: chex.Array, key: chex.PRNGKey) -> chex.Array:
         """Select stochastic action given observation."""
-        return self.actor.sample_action(state.actor_params, obs, key)[0]
+        return self.actor.sample_action(state.actor_params, obs, key, training=False)[0]
 
     def _critic_loss_fn(
         self,

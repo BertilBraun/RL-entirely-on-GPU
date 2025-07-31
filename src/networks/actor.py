@@ -64,6 +64,7 @@ class ActorNetwork(nn.Module):
         Returns:
             Tuple of (action, log_prob)
         """
+
         mu, log_std = self.apply(params, obs, training=training)
         std = jnp.exp(log_std)
 
