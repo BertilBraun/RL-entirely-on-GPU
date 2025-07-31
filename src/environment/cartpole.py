@@ -74,7 +74,7 @@ def cartpole_step(
 @jax.jit
 def get_obs(state: CartPoleState, rail_limit: float, max_base_speed: float, max_speed: float) -> chex.Array:
     """Observation: [x, x_dot, cos(theta), sin(theta), theta_dot]"""
-    return jnp.concatenate(
+    return jnp.stack(
         [
             state.x / rail_limit,  # Normalize position to [-1, 1]
             state.x_dot / max_base_speed,  # Normalize base velocity to [-1, 1]
@@ -82,7 +82,7 @@ def get_obs(state: CartPoleState, rail_limit: float, max_base_speed: float, max_
             jnp.sin(state.theta),  # Sine of angle
             state.theta_dot / max_speed,  # Normalize angular velocity to [-1, 1]
         ],
-        axis=-1,
+        axis=1,
     )
 
 
@@ -102,13 +102,13 @@ def reward_fn(state: CartPoleState, force: chex.Array, length: float, rail_limit
         - 1e-4 * (force**2)
         - jnp.where(jnp.abs(state.x) >= rail_limit - 0.5, 2, 0)  # penalty for hitting the boundary
     )
-    return r.squeeze(-1)
+    return r
 
 
 @jax.jit
 def is_done(state: CartPoleState, rail_limit: float) -> chex.Array:
     """Episode is done when cart hits boundary."""
-    return (jnp.abs(state.x) >= rail_limit).squeeze(-1)
+    return (jnp.abs(state.x) >= rail_limit).reshape(-1)
 
 
 class CartPoleEnv:
@@ -159,12 +159,12 @@ class CartPoleEnv:
 
         key_x, key_x_dot, key_theta, key_theta_neg, key_theta_dot = jax.random.split(reset_key, 5)
 
-        x = rand((self.num_envs, 1), -1.0, 1.0, key_x)
-        x_dot = rand((self.num_envs, 1), -0.5, 0.5, key_x_dot)
-        theta = rand((self.num_envs, 1), jnp.pi / 2, jnp.pi, key_theta)
-        negative_theta = rand((self.num_envs, 1), 0, 1, key_theta_neg) > 0.5
+        x = rand((self.num_envs,), -1.0, 1.0, key_x)
+        x_dot = rand((self.num_envs,), -0.5, 0.5, key_x_dot)
+        theta = rand((self.num_envs,), jnp.pi / 2, jnp.pi, key_theta)
+        negative_theta = rand((self.num_envs,), 0, 1, key_theta_neg) > 0.5
         theta = jnp.where(negative_theta, -theta, theta)
-        theta_dot = rand((self.num_envs, 1), -0.5, 0.5, key_theta_dot)
+        theta_dot = rand((self.num_envs,), -0.5, 0.5, key_theta_dot)
 
         state = CartPoleState(x=x, x_dot=x_dot, theta=theta, theta_dot=theta_dot)
         obs = get_obs(state, self.rail_limit, self.max_base_speed, self.max_speed)
@@ -176,7 +176,7 @@ class CartPoleEnv:
     ) -> Tuple[chex.Array, chex.Array, chex.Array, CartPoleState]:
         """Step environment(s) forward."""
         # Clip action to valid range
-        action = jnp.asarray(action).reshape(self.num_envs, 1)
+        action = jnp.asarray(action).reshape(self.num_envs)
         force = jnp.clip(action, -self.max_force, self.max_force)
 
         # Physics step
