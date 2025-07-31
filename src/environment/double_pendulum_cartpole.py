@@ -2,21 +2,21 @@ from functools import partial
 import jax
 import chex
 import jax.numpy as jnp
-from typing import Tuple
+from typing import Callable, Tuple
 
 
 # Default physical parameters for double pendulum
 DEFAULT_PARAMS = {
-    'dt': 1 / 60,
-    'g': 9.81,
+    'dt': 1 / 120,
+    'g': -9.81,
     'length1': 1.0,  # First pendulum length
     'length2': 1.0,  # Second pendulum length
-    'm1': 0.01,  # First pendulum mass
-    'm2': 0.01,  # Second pendulum mass
+    'm1': 0.1,  # First pendulum mass
+    'm2': 0.1,  # Second pendulum mass
     'M': 1.0,  # Cart mass
-    'max_speed': 4.0,
-    'max_base_speed': 3.0,
-    'max_force': 15.0,
+    'max_speed': 10.0,  # TODO reduce
+    'max_base_speed': 10.0,  # TODO reduce
+    'max_force': 100.0,  # TODO reduce
     'rail_limit': 4.0,  # base can move between -4 and 4
     'theta_damp1': 0.00,  # First pole rotational damping
     'theta_damp2': 0.00,  # Second pole rotational damping
@@ -33,6 +33,186 @@ class DoublePendulumCartPoleState:
     theta1_dot: chex.Array  # First pendulum angular velocity
     theta2: chex.Array  # Second pendulum angle (from vertical)
     theta2_dot: chex.Array  # Second pendulum angular velocity
+
+
+# -------------------------------
+# Params & State
+# -------------------------------
+
+
+@chex.dataclass
+class Params:
+    dt: float
+    g: float
+    length1: float
+    length2: float
+    m1: float
+    m2: float
+    M: float
+    theta_damp1: float
+    theta_damp2: float
+
+
+# -------------------------------
+# Lagrangian-based EoM (autodiff)
+# -------------------------------
+
+
+def _lagrangian(q: chex.Array, v: chex.Array, params: Params) -> chex.Array:
+    """
+    q = [x, th1, th2], v = [xd, th1d, th2d]
+    Angles measured from upright (0 = up). Positive y downward.
+    """
+    x, th1, th2 = q
+    xd, th1d, th2d = v
+    l1, l2 = params.length1 / 2, params.length2 / 2
+    m1, m2, M = params.m1, params.m2, params.M
+    g = params.g
+
+    # Link COM positions in cart frame (pivot at cart, y down)
+    # Using full-length rods; if your COM is at l/2, replace l -> l/2 below.
+    y1 = -l1 * jnp.cos(th1)
+    y2 = y1 - l2 * jnp.cos(th2)
+
+    # Velocities of link COMs in world frame
+    v1x = xd + l1 * jnp.cos(th1) * th1d
+    v1y = l1 * jnp.sin(th1) * th1d
+    v2x = v1x + l2 * jnp.cos(th2) * th2d
+    v2y = v1y + l2 * jnp.sin(th2) * th2d
+
+    T = 0.5 * M * xd**2 + 0.5 * m1 * (v1x**2 + v1y**2) + 0.5 * m2 * (v2x**2 + v2y**2)
+
+    V = m1 * g * y1 + m2 * g * y2  # y down ⇒ upright is high potential, unstable
+
+    return T - V  # L = T - V
+
+
+def _generalized_forces(v: chex.Array, params: Params, force: chex.Array) -> chex.Array:
+    """Q = [Fx_on_cart, τ1, τ2] with joint Rayleigh damping."""
+    xd, th1d, th2d = v
+    # Cart actuation (force along x), viscous damping at joints
+    return jnp.array([force, -params.theta_damp1 * th1d, -params.theta_damp2 * th2d])
+
+
+def _accelerations_single(q: chex.Array, v: chex.Array, params: Params, force: chex.Array) -> chex.Array:
+    """
+    Returns vdot solving:  d/dt(∂L/∂v) - ∂L/∂q = Q  ⇒  M(q) vdot = Q + ∂L/∂q - (∂/∂q ∂L/∂v) v
+    """
+    # Gradients
+    dLdq = jax.grad(_lagrangian, argnums=0)(q, v, params)  # ∂L/∂q
+    dLdv = jax.grad(_lagrangian, argnums=1)(q, v, params)  # ∂L/∂v
+
+    # Mass matrix M(q) = ∂/∂v (∂L/∂v)
+    Mmat = jax.jacfwd(lambda vv: jax.grad(_lagrangian, 1)(q, vv, params))(v)
+
+    # C(q,v) v term = (∂/∂q ∂L/∂v) v
+    C_times_v = jax.jacfwd(lambda qq: jax.grad(_lagrangian, 1)(qq, v, params))(q) @ v
+
+    Q = _generalized_forces(v, params, force)
+
+    rhs = Q + dLdq - C_times_v
+    vdot = jnp.linalg.solve(Mmat, rhs)  # stable, no explicit inverse
+    return vdot
+
+
+def _wrap_angle(a: chex.Array) -> chex.Array:
+    return (a + jnp.pi) % (2.0 * jnp.pi) - jnp.pi
+
+
+def _step_single(
+    x: chex.Array,
+    x_dot: chex.Array,
+    theta1: chex.Array,
+    theta1_dot: chex.Array,
+    theta2: chex.Array,
+    theta2_dot: chex.Array,
+    force: chex.Array,
+    params: Params,
+) -> DoublePendulumCartPoleState:
+    """
+    Semi-implicit (symplectic) Euler:
+      v_{t+1} = v_t + dt * vdot(q_t, v_t)
+      q_{t+1} = q_t + dt * v_{t+1}
+    """
+    q = jnp.array([x, theta1, theta2])
+    v = jnp.array([x_dot, theta1_dot, theta2_dot])
+
+    vdot = _accelerations_single(q, v, params, force)
+
+    v_new = v + params.dt * vdot
+    q_new = q + params.dt * v_new
+
+    x_new, th1_new, th2_new = q_new
+    xd_new, th1d_new, th2d_new = v_new
+
+    return DoublePendulumCartPoleState(
+        x=x_new,
+        x_dot=xd_new,
+        theta1=_wrap_angle(th1_new),
+        theta1_dot=th1d_new,
+        theta2=_wrap_angle(th2_new),
+        theta2_dot=th2d_new,
+    )
+
+
+# -------------------------------
+# Batched, JIT-compiled step
+# -------------------------------
+
+
+def make_batched_step(
+    params: Params,
+) -> Callable[[DoublePendulumCartPoleState, chex.Array], DoublePendulumCartPoleState]:
+    """
+    Returns a compiled function that advances a batch of environments in parallel.
+
+    Input shapes:
+      - State fields: (batch,) or () scalars; all must share the same leading shape
+      - u (force):    (batch,)   (cart force per env)
+
+    Output:
+      - next State with same leading shape
+    """
+    # Vectorize _step_single over the leading axis
+    vmap_step = jax.vmap(
+        _step_single,
+        in_axes=(
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            None,
+        ),
+    )
+
+    # JIT compile; donate state to reduce memory traffic
+    @jax.jit
+    def step_batched(state: DoublePendulumCartPoleState, force: chex.Array) -> DoublePendulumCartPoleState:
+        num_envs = state.x.shape[0]
+        res = vmap_step(
+            state.x.reshape(num_envs),
+            state.x_dot.reshape(num_envs),
+            state.theta1.reshape(num_envs),
+            state.theta1_dot.reshape(num_envs),
+            state.theta2.reshape(num_envs),
+            state.theta2_dot.reshape(num_envs),
+            force.reshape(num_envs),
+            params,
+        )
+
+        return DoublePendulumCartPoleState(
+            x=res.x.reshape(num_envs, 1),
+            x_dot=res.x_dot.reshape(num_envs, 1),
+            theta1=res.theta1.reshape(num_envs, 1),
+            theta1_dot=res.theta1_dot.reshape(num_envs, 1),
+            theta2=res.theta2.reshape(num_envs, 1),
+            theta2_dot=res.theta2_dot.reshape(num_envs, 1),
+        )
+
+    return step_batched
 
 
 @jax.jit
@@ -84,8 +264,8 @@ def double_pendulum_cartpole_step(
     # Right hand side vector elements
     # Gravitational and centrifugal terms
     f1 = force + (m1 + m2) * length1 * theta1_dot**2 * sin1 + m2 * length2 * theta2_dot**2 * sin2
-    f2 = -(m1 + m2) * g * length1 * sin1 + m2 * length1 * length2 * theta2_dot**2 * sin12
-    f3 = -m2 * g * length2 * sin2 - m2 * length1 * length2 * theta1_dot**2 * sin12
+    f2 = (m1 + m2) * g * length1 * sin1 + m2 * length1 * length2 * theta2_dot**2 * sin12
+    f3 = m2 * g * length2 * sin2 - m2 * length1 * length2 * theta1_dot**2 * sin12
 
     # Apply damping
     f2 -= theta_damp1 * theta1_dot * (m1 + m2) * length1**2
@@ -201,7 +381,7 @@ def reward_fn(
 @jax.jit
 def is_done(state: DoublePendulumCartPoleState, rail_limit: float) -> chex.Array:
     """Episode is done when cart hits boundary."""
-    return (jnp.abs(state.x) >= rail_limit).squeeze(-1)
+    return (jnp.abs(state.x) >= rail_limit).reshape(-1)
 
 
 class DoublePendulumCartPoleEnv:
@@ -248,6 +428,20 @@ class DoublePendulumCartPoleEnv:
         self.action_dim = 1  # Force applied to cart
         self.obs_dim = 8  # [x, x_dot, cos(theta1), sin(theta1), theta1_dot, cos(theta2), sin(theta2), theta2_dot]
 
+        self._step = make_batched_step(
+            Params(
+                dt=self.dt,
+                g=self.g,
+                length1=self.length1,
+                length2=self.length2,
+                m1=self.m1,
+                m2=self.m2,
+                M=self.M,
+                theta_damp1=self.theta_damp1,
+                theta_damp2=self.theta_damp2,
+            )
+        )
+
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, reset_key: chex.PRNGKey) -> Tuple[chex.Array, DoublePendulumCartPoleState]:
         """Reset environment(s) to initial state."""
@@ -256,26 +450,27 @@ class DoublePendulumCartPoleEnv:
             key, sub_key = jax.random.split(key)
             return jax.random.uniform(sub_key, shape, minval=lo, maxval=hi)
 
-        keys = jax.random.split(reset_key, 8)
+        k1, k2, k3, k4, k5, k6 = jax.random.split(reset_key, 6)
 
         # Initialize cart position and velocity
-        x = rand((self.num_envs, 1), -1.0, 1.0, keys[0])
-        x_dot = rand((self.num_envs, 1), -0.5, 0.5, keys[1])
+        x = rand((self.num_envs, 1), -1.0, 1.0, k1)
+        x_dot = rand((self.num_envs, 1), -0.5, 0.5, k2)
 
         # Initialize first pendulum (hanging down to slightly off vertical)
-        theta1 = rand((self.num_envs, 1), jnp.pi / 3, 2 * jnp.pi / 3, keys[2])
-        negative_theta1 = rand((self.num_envs, 1), 0, 1, keys[3]) > 0.5
-        theta1 = jnp.where(negative_theta1, jnp.negative(theta1), theta1)
-        theta1_dot = rand((self.num_envs, 1), -0.5, 0.5, keys[4])
+        theta1 = rand((self.num_envs, 1), -jnp.pi, jnp.pi, k3)
+        theta1_dot = rand((self.num_envs, 1), -0.5, 0.5, k4)
 
         # Initialize second pendulum (hanging down to slightly off vertical)
-        theta2 = rand((self.num_envs, 1), jnp.pi / 3, 2 * jnp.pi / 3, keys[5])
-        negative_theta2 = rand((self.num_envs, 1), 0, 1, keys[6]) > 0.5
-        theta2 = jnp.where(negative_theta2, jnp.negative(theta2), theta2)
-        theta2_dot = rand((self.num_envs, 1), -0.5, 0.5, keys[7])
+        theta2 = rand((self.num_envs, 1), -jnp.pi, jnp.pi, k5)
+        theta2_dot = rand((self.num_envs, 1), -0.5, 0.5, k6)
 
         state = DoublePendulumCartPoleState(
-            x=x, x_dot=x_dot, theta1=theta1, theta1_dot=theta1_dot, theta2=theta2, theta2_dot=theta2_dot
+            x=x,
+            x_dot=x_dot,
+            theta1=theta1,
+            theta1_dot=theta1_dot,
+            theta2=theta2,
+            theta2_dot=theta2_dot,
         )
         obs = get_obs(state, self.rail_limit, self.max_base_speed, self.max_speed)
         return obs, state
@@ -290,20 +485,23 @@ class DoublePendulumCartPoleEnv:
         force = jnp.clip(action, -self.max_force, self.max_force)
 
         # Physics step
-        next_state = double_pendulum_cartpole_step(
-            state=state,
-            force=force,
-            dt=self.dt,
-            g=self.g,
-            length1=self.length1,
-            length2=self.length2,
-            m1=self.m1,
-            m2=self.m2,
-            M=self.M,
-            rail_limit=self.rail_limit,
-            theta_damp1=self.theta_damp1,
-            theta_damp2=self.theta_damp2,
-        )
+        if False:
+            next_state = double_pendulum_cartpole_step(
+                state=state,
+                force=force,
+                dt=self.dt,
+                g=self.g,
+                length1=self.length1,
+                length2=self.length2,
+                m1=self.m1,
+                m2=self.m2,
+                M=self.M,
+                rail_limit=self.rail_limit,
+                theta_damp1=self.theta_damp1,
+                theta_damp2=self.theta_damp2,
+            )
+        else:
+            next_state = self._step(state, force)
 
         # Clip velocities (safety caps)
         next_state = DoublePendulumCartPoleState(

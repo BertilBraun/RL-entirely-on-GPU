@@ -94,36 +94,30 @@ class ChunkTrainer:
         reset_obs, reset_state = self.env.reset(reset_key)
 
         next_env_steps = c.train.env_steps + 1
-        next_episode_rewards = jnp.asarray(c.train.episode_rewards + reward)
-        should_reset = jnp.logical_or(done, next_env_steps >= self.max_episode_steps)
+        next_episode_rewards = c.train.episode_rewards + reward
+        should_reset = done | (next_env_steps >= self.max_episode_steps)
 
-        obs_after_reset = jnp.asarray(jnp.where(should_reset[..., None], reset_obs, next_obs))
+        obs_after_reset = jnp.where(should_reset[..., None], reset_obs, next_obs)
 
         # Handle state reset based on environment type
         if isinstance(next_env_state, DoublePendulumCartPoleState):
             env_state_after_reset = DoublePendulumCartPoleState(
-                x=jnp.asarray(jnp.where(should_reset[..., None], reset_state.x, next_env_state.x)),
-                x_dot=jnp.asarray(jnp.where(should_reset[..., None], reset_state.x_dot, next_env_state.x_dot)),
-                theta1=jnp.asarray(jnp.where(should_reset[..., None], reset_state.theta1, next_env_state.theta1)),
-                theta1_dot=jnp.asarray(
-                    jnp.where(should_reset[..., None], reset_state.theta1_dot, next_env_state.theta1_dot)
-                ),
-                theta2=jnp.asarray(jnp.where(should_reset[..., None], reset_state.theta2, next_env_state.theta2)),
-                theta2_dot=jnp.asarray(
-                    jnp.where(should_reset[..., None], reset_state.theta2_dot, next_env_state.theta2_dot)
-                ),
+                x=jnp.where(should_reset[..., None], reset_state.x, next_env_state.x),
+                x_dot=jnp.where(should_reset[..., None], reset_state.x_dot, next_env_state.x_dot),
+                theta1=jnp.where(should_reset[..., None], reset_state.theta1, next_env_state.theta1),
+                theta1_dot=jnp.where(should_reset[..., None], reset_state.theta1_dot, next_env_state.theta1_dot),
+                theta2=jnp.where(should_reset[..., None], reset_state.theta2, next_env_state.theta2),
+                theta2_dot=jnp.where(should_reset[..., None], reset_state.theta2_dot, next_env_state.theta2_dot),
             )
         else:
             env_state_after_reset = CartPoleState(
-                x=jnp.asarray(jnp.where(should_reset[..., None], reset_state.x, next_env_state.x)),
-                x_dot=jnp.asarray(jnp.where(should_reset[..., None], reset_state.x_dot, next_env_state.x_dot)),
-                theta=jnp.asarray(jnp.where(should_reset[..., None], reset_state.theta, next_env_state.theta)),
-                theta_dot=jnp.asarray(
-                    jnp.where(should_reset[..., None], reset_state.theta_dot, next_env_state.theta_dot)
-                ),
+                x=jnp.where(should_reset[..., None], reset_state.x, next_env_state.x),
+                x_dot=jnp.where(should_reset[..., None], reset_state.x_dot, next_env_state.x_dot),
+                theta=jnp.where(should_reset[..., None], reset_state.theta, next_env_state.theta),
+                theta_dot=jnp.where(should_reset[..., None], reset_state.theta_dot, next_env_state.theta_dot),
             )
-        env_steps_after_reset = jnp.asarray(jnp.where(should_reset, 0, next_env_steps))
-        rewards_after_reset = jnp.asarray(jnp.where(should_reset, 0.0, next_episode_rewards))
+        env_steps_after_reset = jnp.where(should_reset, 0, next_env_steps)
+        rewards_after_reset = jnp.where(should_reset, 0.0, next_episode_rewards)
 
         return env_state_after_reset, obs_after_reset, env_steps_after_reset, rewards_after_reset
 
