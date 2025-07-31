@@ -117,7 +117,6 @@ def run_training_loop(
                     step=int(train_carry.total_updates_done),
                     rewards=np.array([train_carry.episode_rewards]).squeeze(),
                 )
-                run_pendulums_viz(train_carry.rng, chunk_trainer.sac, train_carry.sac_state)
 
             # Print progress
             ups = metrics.chunk_updates / dt if dt > 0 else 0.0
@@ -130,6 +129,8 @@ def run_training_loop(
 
     except KeyboardInterrupt:
         print('\n⏸️  Training interrupted by user')
+
+    run_pendulums_viz(train_carry.rng, chunk_trainer.sac, train_carry.sac_state)
 
     return time.time() - start_time
 
@@ -162,7 +163,9 @@ def print_final_stats_and_cleanup(
 
 def run_pendulums_viz(rng: chex.PRNGKey, sac: SAC, sac_state: SACState) -> None:
     env = CartPoleEnv(num_envs=4)
-    live_viz = CartPoleLiveVisualizer(num_cartpoles=env.num_envs, length=env.length, rail_limit=env.rail_limit)
+    live_viz = CartPoleLiveVisualizer(
+        num_cartpoles=env.num_envs, length=env.length, rail_limit=env.rail_limit, should_save=True
+    )
 
     obs, env_state = env.reset(rng)
 
@@ -173,6 +176,8 @@ def run_pendulums_viz(rng: chex.PRNGKey, sac: SAC, sac_state: SACState) -> None:
         live_viz.update(env_state, step=step, rewards=np.array([reward]).squeeze())
         if jnp.any(done):
             break
+
+    live_viz.save_frames('pendulums_viz.gif')
 
 
 def main() -> None:

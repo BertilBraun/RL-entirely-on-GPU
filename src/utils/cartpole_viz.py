@@ -1,7 +1,8 @@
-from dataclasses import dataclass
 import pygame
 import numpy as np
+from PIL import Image
 from typing import Tuple
+from dataclasses import dataclass
 
 from environment.cartpole import CartPoleState
 
@@ -28,11 +29,20 @@ class CartPoleLiveVisualizer:
     Real-time pygame-based visualization for cart-pole environments during training.
     """
 
-    def __init__(self, num_cartpoles: int, length: float, rail_limit: float, window_size: Tuple[int, int] = (800, 600)):
+    def __init__(
+        self,
+        num_cartpoles: int,
+        length: float,
+        rail_limit: float,
+        window_size: Tuple[int, int] = (800, 600),
+        should_save: bool = False,
+    ):
         self.num_cartpoles = min(num_cartpoles, 4)  # Limit to 4 for display
         self.length = length  # Pendulum length
         self.rail_limit = rail_limit
         self.window_size = window_size
+        self.should_save = should_save
+        self.frames = []
 
         # Initialize pygame
         self.screen = pygame.display.set_mode(window_size)
@@ -204,6 +214,11 @@ class CartPoleLiveVisualizer:
 
         # Update display
         pygame.display.flip()
+        if self.should_save:
+            x3 = pygame.surfarray.array3d(self.screen)
+            x3 = np.moveaxis(x3, 0, 1)
+            array = Image.fromarray(np.uint8(x3))
+            self.frames.append(array)
 
     def clear_trails(self):
         """Clear all pendulum trails."""
@@ -213,3 +228,19 @@ class CartPoleLiveVisualizer:
     def close(self):
         """Close the pygame window."""
         pygame.quit()
+
+    def save_frames(self, path: str, fps: int = 60):
+        """Save the frames to a gif file."""
+        if not self.should_save:
+            raise ValueError('Frames not saved because should_save is False')
+        if not self.frames:
+            raise ValueError('No frames to save')
+
+        self.frames[0].save(
+            path,
+            save_all=True,
+            optimize=False,
+            append_images=self.frames[1:],
+            loop=0,
+            duration=int(1000 / fps),  # display time of each frame in ms
+        )
