@@ -96,6 +96,9 @@ def run_training_loop(
             t0 = time.time()
             train_carry, metrics = chunk_trainer.run_chunk(train_carry)  # GPU-only work
 
+            int(metrics.chunk_updates)  # Access so that the dt is calculated correctly
+            dt = time.time() - t0
+
             # update visualizations
             if training_viz:
                 training_viz.update_metrics(
@@ -117,7 +120,6 @@ def run_training_loop(
                 run_pendulums_viz(train_carry.rng, chunk_trainer.sac, train_carry.sac_state)
 
             # Print progress
-            dt = time.time() - t0
             ups = metrics.chunk_updates / dt if dt > 0 else 0.0
             print(
                 f'+{metrics.chunk_updates:4d} updates this chunk | {ups:6.1f} upd/s | '
