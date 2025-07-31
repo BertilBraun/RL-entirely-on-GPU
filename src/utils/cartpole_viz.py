@@ -7,12 +7,6 @@ from environment.cartpole import CartPoleState
 
 
 @dataclass
-class EpisodeInfo:
-    episode: int
-    step: int
-
-
-@dataclass
 class Point:
     x: float
     y: float
@@ -76,16 +70,13 @@ class CartPoleLiveVisualizer:
         pygame.font.init()
         self.font = pygame.font.Font(pygame.font.get_default_font(), 24)
 
-        # Episode info
-        self.episode_info = EpisodeInfo(episode=0, step=0)
-
     def world_to_screen(self, x: float, y: float) -> Tuple[int, int]:
         """Convert world coordinates to screen coordinates."""
         screen_x = int(self.center_x + x * self.scale)
         screen_y = int(self.center_y - y * self.scale)  # Flip Y axis
         return screen_x, screen_y
 
-    def update(self, state: CartPoleState, episode: int, step: int, rewards: np.ndarray) -> None:
+    def update(self, state: CartPoleState, step: int, rewards: np.ndarray) -> None:
         """
         Update the visualization with new cart-pole states.
 
@@ -100,10 +91,6 @@ class CartPoleLiveVisualizer:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 exit()
-
-        # Update episode info
-        self.episode_info.episode = episode
-        self.episode_info.step = step
 
         # Clear screen
         self.screen.fill(Colors.background)
@@ -208,10 +195,7 @@ class CartPoleLiveVisualizer:
 
         # Draw episode information
         info_y = 10
-        info_texts = [
-            f'Episode: {self.episode_info.episode}',
-            f'Step: {self.episode_info.step}',
-        ]
+        info_texts = [f'Step: {step}']
 
         for text_str in info_texts:
             text = self.font.render(text_str, True, Colors.text)
