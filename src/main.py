@@ -25,19 +25,29 @@ from config import (
     EMA_BETA,
     ENABLE_TRAINING_VIZ,
     ENABLE_LIVE_VIZ,
+    USE_DOUBLE_PENDULUM,
 )
 from environment.cartpole import CartPoleEnv
+from environment.double_pendulum_cartpole import DoublePendulumCartPoleEnv
 from algorithms.replay_buffer import ReplayBuffer
 from algorithms.sac import SAC, SACState
-from training.data_structures import TrainCarry, TrainingSetup
+from training.data_structures import EnvType, TrainCarry, TrainingSetup
 from training.chunk_trainer import ChunkTrainer
 from utils.cartpole_viz import CartPoleLiveVisualizer
+from utils.double_pendulum_cartpole_viz import DoublePendulumCartPoleLiveVisualizer
 from utils.training_viz import TrainingVisualizer
+
+
+VisualizerType = DoublePendulumCartPoleLiveVisualizer | CartPoleLiveVisualizer
 
 
 def setup_environment_and_agent(rng: jax.Array) -> TrainingSetup:
     """Initialize environment, agent, and replay buffer."""
-    env = CartPoleEnv(num_envs=NUM_ENVS)
+    env: EnvType
+    if USE_DOUBLE_PENDULUM:
+        env = DoublePendulumCartPoleEnv(num_envs=NUM_ENVS)
+    else:
+        env = CartPoleEnv(num_envs=NUM_ENVS)
     sac = SAC(obs_dim=env.obs_dim, action_dim=env.action_dim, max_action=env.max_force, config=SAC_CONFIG)
 
     rng, sac_key, buf_key, reset_key = jax.random.split(rng, 4)
@@ -60,33 +70,45 @@ def setup_environment_and_agent(rng: jax.Array) -> TrainingSetup:
     )
 
 
-def setup_visualizers(env: CartPoleEnv) -> Tuple[Optional[TrainingVisualizer], Optional[CartPoleLiveVisualizer]]:
+def setup_visualizers(env: EnvType) -> Tuple[Optional[TrainingVisualizer], Optional[VisualizerType]]:
     """Initialize visualization components."""
     training_viz = TrainingVisualizer(figsize=(12, 6)) if ENABLE_TRAINING_VIZ else None
-    live_viz = (
-        CartPoleLiveVisualizer(num_cartpoles=min(NUM_ENVS, 4), length=env.length, rail_limit=env.rail_limit)
-        if ENABLE_LIVE_VIZ
-        else None
-    )
+
+    live_viz: VisualizerType | None
+    if ENABLE_LIVE_VIZ:
+        if USE_DOUBLE_PENDULUM:
+            assert isinstance(env, DoublePendulumCartPoleEnv)
+            live_viz = DoublePendulumCartPoleLiveVisualizer(
+                num_cartpoles=min(NUM_ENVS, 4), length1=env.length1, length2=env.length2, rail_limit=env.rail_limit
+            )
+        else:
+            assert isinstance(env, CartPoleEnv)
+            live_viz = CartPoleLiveVisualizer(
+                num_cartpoles=min(NUM_ENVS, 4), length=env.length, rail_limit=env.rail_limit
+            )
+    else:
+        live_viz = None
+
     return training_viz, live_viz
 
 
 def print_training_info() -> None:
     """Print training configuration."""
-    print('🚀 Starting JAX-based SAC for Cart-Pole (Chunked GPU Training)')
-    print('=' * 70)
-    print(f'Environment: {NUM_ENVS} cart-pole(s)')
+    env_type = 'Double Pendulum Cart-Pole' if USE_DOUBLE_PENDULUM else 'Cart-Pole'
+    print(f'🚀 Starting JAX-based SAC for {env_type} (Chunked GPU Training)')
+    print('=' * 80)
+    print(f'Environment: {NUM_ENVS} {env_type.lower()}(s)')
     print(f'Network: {SAC_CONFIG.hidden_dims} | LR: {SAC_CONFIG.learning_rate}')
     print(f'Updates: total={TOTAL_UPDATES}, per-step={UPDATES_PER_STEP}, per-chunk={STEPS_PER_GPU_CHUNK}')
     print(f'Max episode steps: {MAX_EPISODE_STEPS} | Batch size: {BATCH_SIZE}')
-    print('=' * 70)
+    print('=' * 80)
 
 
 def run_training_loop(
     train_carry: TrainCarry,
     chunk_trainer: ChunkTrainer,
     training_viz: Optional[TrainingVisualizer],
-    live_viz: Optional[CartPoleLiveVisualizer],
+    live_viz: Optional[VisualizerType],
 ) -> float:
     """Main training loop."""
     start_time = time.time()
@@ -96,7 +118,8 @@ def run_training_loop(
             t0 = time.time()
             train_carry, metrics = chunk_trainer.run_chunk(train_carry)  # GPU-only work
 
-            int(metrics.chunk_updates)  # Access so that the dt is calculated correctly
+            # Access so that the results of the JAX GPU computation must be materialized before the dt is calculated correctly
+            int(metrics.chunk_updates)
             dt = time.time() - t0
 
             # update visualizations
@@ -113,7 +136,7 @@ def run_training_loop(
 
             if live_viz:
                 live_viz.update(
-                    train_carry.env_state,
+                    train_carry.env_state,  # type: ignore
                     step=int(train_carry.total_updates_done),
                     rewards=np.array([train_carry.episode_rewards]).squeeze(),
                 )
@@ -139,7 +162,7 @@ def print_final_stats_and_cleanup(
     train_carry: TrainCarry,
     elapsed_time: float,
     training_viz: Optional[TrainingVisualizer],
-    live_viz: Optional[CartPoleLiveVisualizer],
+    live_viz: Optional[VisualizerType],
 ) -> None:
     """Print final statistics and clean up visualizations."""
     total_updates_done = int(train_carry.total_updates_done)
@@ -162,10 +185,23 @@ def print_final_stats_and_cleanup(
 
 
 def run_pendulums_viz(rng: chex.PRNGKey, sac: SAC, sac_state: SACState) -> None:
-    env = CartPoleEnv(num_envs=4)
-    live_viz = CartPoleLiveVisualizer(
-        num_cartpoles=env.num_envs, length=env.length, rail_limit=env.rail_limit, should_save=True
-    )
+    """Run visualization of trained agent."""
+    if USE_DOUBLE_PENDULUM:
+        env = DoublePendulumCartPoleEnv(num_envs=4)
+        live_viz = DoublePendulumCartPoleLiveVisualizer(
+            num_cartpoles=env.num_envs,
+            length1=env.length1,
+            length2=env.length2,
+            rail_limit=env.rail_limit,
+            should_save=True,
+        )
+        filename = 'double_pendulums_viz.gif'
+    else:
+        env = CartPoleEnv(num_envs=4)
+        live_viz = CartPoleLiveVisualizer(
+            num_cartpoles=env.num_envs, length=env.length, rail_limit=env.rail_limit, should_save=True
+        )
+        filename = 'pendulums_viz.gif'
 
     obs, env_state = env.reset(rng)
 
@@ -177,7 +213,8 @@ def run_pendulums_viz(rng: chex.PRNGKey, sac: SAC, sac_state: SACState) -> None:
         if jnp.any(done):
             break
 
-    live_viz.save_frames('pendulums_viz.gif')
+    live_viz.save_frames(filename)
+    print(f'📁 Visualization saved as {filename}')
 
 
 def main() -> None:

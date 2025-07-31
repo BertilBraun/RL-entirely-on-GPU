@@ -9,23 +9,28 @@ import jax.numpy as jnp
 from algorithms.replay_buffer import ReplayBufferState
 from algorithms.sac import SAC, SACState
 from config import NUM_ENVS
+from typing import Union
 from environment.cartpole import CartPoleEnv, CartPoleState
+from environment.double_pendulum_cartpole import DoublePendulumCartPoleEnv, DoublePendulumCartPoleState
 
 # ----------------------------
 # Setup data structures
 # ----------------------------
 
 
+EnvType = DoublePendulumCartPoleEnv | CartPoleEnv
+
+
 @chex.dataclass
 class TrainingSetup:
     """Contains all components needed to initialize training."""
 
-    env: CartPoleEnv
+    env: EnvType
     sac: SAC
     sac_state: SACState
     buffer_state: ReplayBufferState
     initial_obs: chex.Array
-    initial_env_state: CartPoleState
+    initial_env_state: Union[CartPoleState, DoublePendulumCartPoleState]
     rng: chex.PRNGKey
 
 
@@ -41,7 +46,7 @@ class TrainCarry:
     rng: chex.PRNGKey
     sac_state: SACState
     buffer_state: ReplayBufferState
-    env_state: CartPoleState
+    env_state: Union[CartPoleState, DoublePendulumCartPoleState]
     obs: chex.Array  # (num_envs, obs_dim)
     env_steps: chex.Array  # (num_envs,) int32
     episode_rewards: chex.Array  # (num_envs,) float32

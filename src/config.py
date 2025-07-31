@@ -16,15 +16,16 @@ SAC_CONFIG = SACConfig(
 )
 
 # Environment settings
-NUM_ENVS = 256
+NUM_ENVS = 32
 MAX_EPISODE_STEPS = 1000
+USE_DOUBLE_PENDULUM = True  # Set to True for double pendulum, False for single pendulum
 
 # Training settings
 TOTAL_UPDATES = 200_000
 BUFFER_CAPACITY = 1_000_000
 BATCH_SIZE = 256
 UPDATES_PER_STEP = NUM_ENVS // 4  # network updates per env step
-NETWORK_UPDATES_PER_GPU_CHUNK = 1000  # updates per GPU-only chunk
+NETWORK_UPDATES_PER_GPU_CHUNK = 100  # updates per GPU-only chunk
 STEPS_PER_GPU_CHUNK = (NETWORK_UPDATES_PER_GPU_CHUNK + UPDATES_PER_STEP - 1) // UPDATES_PER_STEP
 EMA_BETA = 0.01  # smoothing for meters
 

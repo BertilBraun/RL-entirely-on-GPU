@@ -10,8 +10,12 @@ from typing import Tuple
 
 from algorithms.replay_buffer import ReplayBuffer, ReplayBufferState, Transition
 from algorithms.sac import SAC
-from environment.cartpole import CartPoleEnv, CartPoleState
-from .data_structures import TrainCarry, UpdateCarry, ChunkCarry, ChunkSummary
+from environment.cartpole import CartPoleState
+from environment.double_pendulum_cartpole import DoublePendulumCartPoleState
+from .data_structures import EnvType, TrainCarry, UpdateCarry, ChunkCarry, ChunkSummary
+
+
+EnvStateType = CartPoleState | DoublePendulumCartPoleState
 
 
 class ChunkTrainer:
@@ -19,7 +23,7 @@ class ChunkTrainer:
 
     def __init__(
         self,
-        env: CartPoleEnv,
+        env: EnvType,
         sac: SAC,
         batch_size: int,
         updates_per_step: int,
@@ -81,11 +85,11 @@ class ChunkTrainer:
         self,
         c: ChunkCarry,
         next_obs: chex.Array,
-        next_env_state: CartPoleState,
+        next_env_state: EnvStateType,
         reward: chex.Array,
         done: chex.Array,
         reset_key: chex.PRNGKey,
-    ) -> Tuple[CartPoleState, chex.Array, chex.Array, chex.Array]:
+    ) -> Tuple[EnvStateType, chex.Array, chex.Array, chex.Array]:
         """Handle episode termination and environment reset."""
         reset_obs, reset_state = self.env.reset(reset_key)
 
@@ -94,12 +98,30 @@ class ChunkTrainer:
         should_reset = jnp.logical_or(done, next_env_steps >= self.max_episode_steps)
 
         obs_after_reset = jnp.asarray(jnp.where(should_reset[..., None], reset_obs, next_obs))
-        env_state_after_reset = CartPoleState(
-            x=jnp.asarray(jnp.where(should_reset[..., None], reset_state.x, next_env_state.x)),
-            x_dot=jnp.asarray(jnp.where(should_reset[..., None], reset_state.x_dot, next_env_state.x_dot)),
-            theta=jnp.asarray(jnp.where(should_reset[..., None], reset_state.theta, next_env_state.theta)),
-            theta_dot=jnp.asarray(jnp.where(should_reset[..., None], reset_state.theta_dot, next_env_state.theta_dot)),
-        )
+
+        # Handle state reset based on environment type
+        if isinstance(next_env_state, DoublePendulumCartPoleState):
+            env_state_after_reset = DoublePendulumCartPoleState(
+                x=jnp.asarray(jnp.where(should_reset[..., None], reset_state.x, next_env_state.x)),
+                x_dot=jnp.asarray(jnp.where(should_reset[..., None], reset_state.x_dot, next_env_state.x_dot)),
+                theta1=jnp.asarray(jnp.where(should_reset[..., None], reset_state.theta1, next_env_state.theta1)),
+                theta1_dot=jnp.asarray(
+                    jnp.where(should_reset[..., None], reset_state.theta1_dot, next_env_state.theta1_dot)
+                ),
+                theta2=jnp.asarray(jnp.where(should_reset[..., None], reset_state.theta2, next_env_state.theta2)),
+                theta2_dot=jnp.asarray(
+                    jnp.where(should_reset[..., None], reset_state.theta2_dot, next_env_state.theta2_dot)
+                ),
+            )
+        else:
+            env_state_after_reset = CartPoleState(
+                x=jnp.asarray(jnp.where(should_reset[..., None], reset_state.x, next_env_state.x)),
+                x_dot=jnp.asarray(jnp.where(should_reset[..., None], reset_state.x_dot, next_env_state.x_dot)),
+                theta=jnp.asarray(jnp.where(should_reset[..., None], reset_state.theta, next_env_state.theta)),
+                theta_dot=jnp.asarray(
+                    jnp.where(should_reset[..., None], reset_state.theta_dot, next_env_state.theta_dot)
+                ),
+            )
         env_steps_after_reset = jnp.asarray(jnp.where(should_reset, 0, next_env_steps))
         rewards_after_reset = jnp.asarray(jnp.where(should_reset, 0.0, next_episode_rewards))
 
@@ -110,7 +132,7 @@ class ChunkTrainer:
         rng: chex.PRNGKey,
         c: ChunkCarry,
         buffer_state: ReplayBufferState,
-        env_state: CartPoleState,
+        env_state: EnvStateType,
         obs: chex.Array,
         env_steps: chex.Array,
         episode_rewards: chex.Array,
