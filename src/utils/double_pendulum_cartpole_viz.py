@@ -82,7 +82,7 @@ class DoublePendulumCartPoleLiveVisualizer:
         # Trail data for both pendulum bobs
         self.trail1_data: list[list[Point]] = [[] for _ in range(self.num_cartpoles)]
         self.trail2_data: list[list[Point]] = [[] for _ in range(self.num_cartpoles)]
-        self.max_trail_length = 50
+        self.max_trail_length = 20
 
         # Font for text
         pygame.font.init()

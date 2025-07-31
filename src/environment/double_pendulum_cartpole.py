@@ -40,7 +40,7 @@ class DoublePendulumCartPoleState:
 # -------------------------------
 
 
-@chex.dataclass
+@chex.dataclass(frozen=True)
 class Params:
     dt: float
     g: float
@@ -65,7 +65,7 @@ def _lagrangian(q: chex.Array, v: chex.Array, params: Params) -> chex.Array:
     """
     x, th1, th2 = q
     xd, th1d, th2d = v
-    l1, l2 = params.length1 / 2, params.length2 / 2
+    l1, l2 = params.length1, params.length2
     m1, m2, M = params.m1, params.m2, params.M
     g = params.g
 
