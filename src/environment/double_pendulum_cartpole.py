@@ -17,9 +17,9 @@ DEFAULT_PARAMS = {
     'M': 2.0,  # Cart mass
     'm1': 0.4,  # First pendulum mass
     'm2': 0.4,  # Second pendulum mass
-    'max_base_speed': 100.0,  # TODO reduce
-    'max_speed': 100.0,  # TODO reduce
-    'max_force': 100.0,  # TODO reduce
+    'max_base_speed': 8.0,  # TODO reduce
+    'max_speed': 8.0,  # TODO reduce
+    'max_force': 50.0,  # TODO reduce
     'rail_limit': 10.0,  # base can move between -5 and 5
     'x_damp': 0.05,  # Cart velocity damping
     'theta_damp1': 0.05,  # First pole rotational damping
