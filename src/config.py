@@ -30,7 +30,7 @@ if USE_DOUBLE_PENDULUM:
         tau=0.005,
         grad_clip=10.0,
         target_entropy=-1.5,
-        alpha_config=AutoAlphaConfig(min_alpha=0.03),
+        alpha_config=AutoAlphaConfig(min_alpha=0.005),
         actor_hidden_dims=(256, 256, 256),
         critic_hidden_dims=(256, 256, 256, 256),
     )
