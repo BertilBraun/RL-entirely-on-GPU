@@ -222,7 +222,7 @@ def run_pendulums_viz(rng: chex.PRNGKey, sac: SAC, sac_state: SACState) -> None:
         if jnp.any(done):
             break
 
-    live_viz.save_frames(filename, fps=120 if USE_DOUBLE_PENDULUM else 60)
+    live_viz.save_frames(filename, fps=200 if USE_DOUBLE_PENDULUM else 60)
     print(f'📁 Visualization saved as {filename}')
 
 
