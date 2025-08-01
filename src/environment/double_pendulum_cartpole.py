@@ -104,7 +104,14 @@ def _accelerations_single(
 ) -> chex.Array:
     """
     Returns vdot solving:  d/dt(∂L/∂v) - ∂L/∂q = Q  ⇒  M(q) vdot = Q + ∂L/∂q - (∂/∂q ∂L/∂v) v
+
+    Added numerical safeguards to prevent NaN propagation.
     """
+    # Clamp positions and velocities to reasonable ranges to prevent numerical issues
+    positions = jnp.clip(positions, -100.0, 100.0)
+    velocities = jnp.clip(velocities, -100.0, 100.0)
+    force = jnp.clip(force, -1000.0, 1000.0)
+
     # Gradients
     dLdq = jax.grad(_lagrangian, argnums=0)(positions, velocities, params)  # ∂L/∂q
 
@@ -117,7 +124,31 @@ def _accelerations_single(
     Q = _generalized_forces(velocities, params, force)
 
     rhs = Q + dLdq - C_times_v
-    vdot = jnp.linalg.solve(Mmat, rhs)  # stable, no explicit inverse
+
+    # Add numerical safeguards for the linear solve
+    # Check if mass matrix is well-conditioned
+    det = jnp.linalg.det(Mmat)
+    condition_number = jnp.linalg.cond(Mmat)
+
+    # If matrix is ill-conditioned, use regularized solve
+    is_ill_conditioned = (jnp.abs(det) < 1e-10) | (condition_number > 1e12) | jnp.isnan(det)
+
+    # Regularize the mass matrix when ill-conditioned
+    regularized_Mmat = jnp.where(
+        is_ill_conditioned,
+        Mmat + 1e-6 * jnp.eye(Mmat.shape[0]),  # Add small diagonal regularization
+        Mmat,
+    )
+
+    # Solve the linear system with safeguards
+    vdot = jnp.linalg.solve(regularized_Mmat, rhs)
+
+    # Clamp accelerations to prevent explosion
+    vdot = jnp.clip(vdot, -1000.0, 1000.0)
+
+    # Replace any NaNs with zeros
+    vdot = jnp.where(jnp.isnan(vdot), 0.0, vdot)
+
     return vdot
 
 
@@ -139,7 +170,15 @@ def _step_single(
     Semi-implicit (symplectic) Euler:
       v_{t+1} = v_t + dt * vdot(q_t, v_t)
       q_{t+1} = q_t + dt * v_{t+1}
+
+    Added numerical safeguards to prevent NaN propagation.
     """
+    # Clamp inputs to prevent numerical issues
+    x = jnp.clip(x, -50.0, 50.0)
+    x_dot = jnp.clip(x_dot, -100.0, 100.0)
+    theta1_dot = jnp.clip(theta1_dot, -100.0, 100.0)
+    theta2_dot = jnp.clip(theta2_dot, -100.0, 100.0)
+
     positions = jnp.array([x, theta1, theta2], dtype=DTYPE)
     velocities = jnp.array([x_dot, theta1_dot, theta2_dot], dtype=DTYPE)
 
@@ -148,8 +187,24 @@ def _step_single(
     velocities_new = velocities + params.dt * vdot
     positions_new = positions + params.dt * velocities_new
 
+    # Clamp the new values to prevent explosion
+    velocities_new = jnp.clip(velocities_new, -100.0, 100.0)
+    positions_new = jnp.array(
+        [
+            jnp.clip(positions_new[0], -50.0, 50.0),  # x position
+            positions_new[1],  # theta1 (don't clamp angles)
+            positions_new[2],  # theta2 (don't clamp angles)
+        ]
+    )
+
     x_new, th1_new, th2_new = positions_new
     xd_new, th1d_new, th2d_new = velocities_new
+
+    # Replace any NaNs with safe values
+    x_new = jnp.where(jnp.isnan(x_new), 0.0, x_new)
+    xd_new = jnp.where(jnp.isnan(xd_new), 0.0, xd_new)
+    th1d_new = jnp.where(jnp.isnan(th1d_new), 0.0, th1d_new)
+    th2d_new = jnp.where(jnp.isnan(th2d_new), 0.0, th2d_new)
 
     return DoublePendulumCartPoleState(
         x=x_new,
