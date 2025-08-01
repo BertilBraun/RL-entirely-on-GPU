@@ -66,8 +66,6 @@ class ReplayBuffer:
         Returns:
             Updated buffer state
         """
-        from config import DTYPE
-
         batch_size = transitions.obs.shape[0]  # type: ignore
         capacity = buffer_state.data.obs.shape[0]  # type: ignore
 
@@ -75,7 +73,7 @@ class ReplayBuffer:
         idx = (jnp.arange(batch_size, dtype=jnp.int32) + buffer_state.ptr) % capacity
 
         def set_field(buf_arr, new_arr):
-            return buf_arr.at[idx].set(new_arr.reshape(batch_size, -1).astype(DTYPE))
+            return buf_arr.at[idx].set(new_arr.reshape(batch_size, -1))
 
         new_data = Transition(
             obs=set_field(buffer_state.data.obs, transitions.obs),

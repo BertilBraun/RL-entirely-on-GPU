@@ -69,7 +69,7 @@ class ChunkTrainer:
             action=action.astype(DTYPE),
             reward=reward.astype(DTYPE),
             next_obs=next_obs.astype(DTYPE),
-            done=done.astype(DTYPE),
+            done=done.astype(bool),
         )
         buffer_state_updated = ReplayBuffer.add_batch(carry.train.buffer_state, transition)
 
