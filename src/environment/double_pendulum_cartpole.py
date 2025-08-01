@@ -296,31 +296,44 @@ def reward_fn(
     - Positive rewards (0-10 range) instead of negative penalties
     - Dense feedback with exponential rewards for uprightness
     - Bonus rewards for achieving multiple goals together
+    - Added NaN safeguards
     """
+
+    # Add NaN safeguards for all inputs
+    x = jnp.where(jnp.isnan(state.x), 0.0, state.x)
+    theta1 = jnp.where(jnp.isnan(state.theta1), 0.0, state.theta1)
+    theta2 = jnp.where(jnp.isnan(state.theta2), 0.0, state.theta2)
+    theta1_dot = jnp.where(jnp.isnan(state.theta1_dot), 0.0, state.theta1_dot)
+    theta2_dot = jnp.where(jnp.isnan(state.theta2_dot), 0.0, state.theta2_dot)
+
+    # Clamp values to reasonable ranges
+    x = jnp.clip(x, -rail_limit, rail_limit)
+    theta1_dot = jnp.clip(theta1_dot, -100.0, 100.0)
+    theta2_dot = jnp.clip(theta2_dot, -100.0, 100.0)
 
     # === PRIMARY OBJECTIVE: UPRIGHTNESS (0-6 total) ===
     # Strong exponential rewards for each pendulum being upright
-    upright_reward_1 = 3.0 * jnp.exp(-2.0 * state.theta1**2)
-    upright_reward_2 = 3.0 * jnp.exp(-2.0 * state.theta2**2)
+    upright_reward_1 = 3.0 * jnp.exp(-2.0 * theta1**2)
+    upright_reward_2 = 3.0 * jnp.exp(-2.0 * theta2**2)
 
     # === STABILITY BONUS (0-2 total) ===
     # Reward stable, controlled movement
-    stability_bonus_1 = 1.0 * jnp.exp(-0.1 * state.theta1_dot**2)
-    stability_bonus_2 = 1.0 * jnp.exp(-0.1 * state.theta2_dot**2)
+    stability_bonus_1 = 1.0 * jnp.exp(-0.1 * theta1_dot**2)
+    stability_bonus_2 = 1.0 * jnp.exp(-0.1 * theta2_dot**2)
 
     # === POSITION CONTROL (0-1 total) ===
     # Gentle reward for keeping cart centered
-    position_bonus = 1.0 * jnp.exp(-0.25 * state.x**2)
+    position_bonus = 1.0 * jnp.exp(-0.25 * x**2)
 
     # === PERFECT CONTROL BONUS (0-2 total) ===
     # Big bonus when everything is working well together
-    both_upright = (jnp.abs(state.theta1) < 0.5) & (jnp.abs(state.theta2) < 0.5)
-    both_stable = (jnp.abs(state.theta1_dot) < 2.0) & (jnp.abs(state.theta2_dot) < 2.0)
+    both_upright = (jnp.abs(theta1) < 0.5) & (jnp.abs(theta2) < 0.5)
+    both_stable = (jnp.abs(theta1_dot) < 2.0) & (jnp.abs(theta2_dot) < 2.0)
     perfect_bonus = jnp.where(both_upright & both_stable, 2.0, 0.0)
 
     # === BOUNDARY SAFETY ===
     # Smooth penalty approaching boundaries
-    boundary_safety = jnp.where(jnp.abs(state.x) > rail_limit * 0.8, -10.0, 0.0)
+    boundary_safety = jnp.where(jnp.abs(x) > rail_limit * 0.8, -10.0, 0.0)
 
     # Total reward: 0 to ~12 when perfect, with smooth gradients
     total_reward = (
@@ -332,6 +345,9 @@ def reward_fn(
         + perfect_bonus
         + boundary_safety
     )
+
+    # Final NaN safeguard
+    total_reward = jnp.where(jnp.isnan(total_reward), 0.0, total_reward)
 
     return total_reward
 
