@@ -15,31 +15,8 @@ from typing import NamedTuple, Tuple
 from networks.actor import ActorNetwork
 from networks.critic import DoubleCriticNetwork
 from algorithms.replay_buffer import Transition
-
-
-class AutoAlphaConfig(NamedTuple):
-    """Configuration for auto alpha."""
-
-    min_alpha: float = 0.03
-
-
-class ManualAlphaConfig(NamedTuple):
-    """Configuration for manual alpha."""
-
-    alpha: float = 0.2
-
-
-class SACConfig(NamedTuple):
-    """Configuration for SAC algorithm."""
-
-    learning_rate: float = 3e-4
-    gamma: float = 0.99
-    tau: float = 0.005
-    grad_clip: float = 10.0
-    alpha_config: AutoAlphaConfig | ManualAlphaConfig = AutoAlphaConfig()
-    target_entropy: float | None = None
-    actor_hidden_dims: Tuple[int, ...] = (32, 32)
-    critic_hidden_dims: Tuple[int, ...] = (32, 32)
+from config import DTYPE
+from training.data_structures import AutoAlphaConfig, SACConfig
 
 
 class SACState(NamedTuple):
@@ -286,7 +263,7 @@ class SAC:
         q_target = jnp.minimum(q1_target, q2_target)
 
         # Compute target with entropy regularization
-        not_done = 1.0 - batch.done.astype(jnp.float32)
+        not_done = 1.0 - batch.done.astype(DTYPE)
         target_q = batch.reward + self.config.gamma * not_done * (q_target - alpha * next_log_probs)
 
         # Stop gradient on target

@@ -4,8 +4,6 @@ import chex
 import jax.numpy as jnp
 from typing import Callable, Tuple
 
-jax.config.update('jax_enable_x64', True)
-
 
 # Default physical parameters for double pendulum
 DEFAULT_PARAMS = {

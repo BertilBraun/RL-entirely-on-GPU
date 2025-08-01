@@ -7,11 +7,12 @@ from __future__ import annotations
 import chex
 import jax.numpy as jnp
 from algorithms.replay_buffer import ReplayBufferState
-from algorithms.sac import SAC, SACState
-from config import NUM_ENVS
-from typing import Union
+from typing import TYPE_CHECKING, NamedTuple, Tuple, Union
 from environment.cartpole import CartPoleEnv, CartPoleState
 from environment.double_pendulum_cartpole import DoublePendulumCartPoleEnv, DoublePendulumCartPoleState
+
+if TYPE_CHECKING:
+    from algorithms.sac import SAC, SACState
 
 # ----------------------------
 # Setup data structures
@@ -34,6 +35,31 @@ class TrainingSetup:
     rng: chex.PRNGKey
 
 
+class AutoAlphaConfig(NamedTuple):
+    """Configuration for auto alpha."""
+
+    min_alpha: float = 0.03
+
+
+class ManualAlphaConfig(NamedTuple):
+    """Configuration for manual alpha."""
+
+    alpha: float = 0.2
+
+
+class SACConfig(NamedTuple):
+    """Configuration for SAC algorithm."""
+
+    learning_rate: float = 3e-4
+    gamma: float = 0.99
+    tau: float = 0.005
+    grad_clip: float = 10.0
+    alpha_config: AutoAlphaConfig | ManualAlphaConfig = AutoAlphaConfig()
+    target_entropy: float | None = None
+    actor_hidden_dims: Tuple[int, ...] = (32, 32)
+    critic_hidden_dims: Tuple[int, ...] = (32, 32)
+
+
 # ----------------------------
 # Training data structures
 # ----------------------------
@@ -54,6 +80,8 @@ class TrainCarry:
 
     @staticmethod
     def init(setup: TrainingSetup) -> TrainCarry:
+        from config import NUM_ENVS, DTYPE
+
         return TrainCarry(
             rng=setup.rng,
             sac_state=setup.sac_state,
@@ -61,7 +89,7 @@ class TrainCarry:
             env_state=setup.initial_env_state,
             obs=setup.initial_obs,
             env_steps=jnp.zeros(NUM_ENVS, dtype=jnp.int32),
-            episode_rewards=jnp.zeros(NUM_ENVS, dtype=jnp.float32),
+            episode_rewards=jnp.zeros(NUM_ENVS, dtype=DTYPE),
             total_updates_done=jnp.array(0, dtype=jnp.int32),
         )
 
@@ -110,14 +138,16 @@ class ChunkCarry:
 
     @staticmethod
     def init(train_carry: TrainCarry) -> ChunkCarry:
+        from config import DTYPE
+
         return ChunkCarry(
             train=train_carry,
             chunk_updates_done=jnp.array(0, jnp.int32),
-            actor_loss_ema=jnp.array(0.0, jnp.float32),
-            critic_loss_ema=jnp.array(0.0, jnp.float32),
-            alpha_ema=jnp.array(0.0, jnp.float32),
-            q_ema=jnp.array(0.0, jnp.float32),
-            reward_ema=jnp.array(0.0, jnp.float32),
+            actor_loss_ema=jnp.array(0.0, DTYPE),
+            critic_loss_ema=jnp.array(0.0, DTYPE),
+            alpha_ema=jnp.array(0.0, DTYPE),
+            q_ema=jnp.array(0.0, DTYPE),
+            reward_ema=jnp.array(0.0, DTYPE),
         )
 
 

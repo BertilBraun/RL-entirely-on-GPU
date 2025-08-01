@@ -12,8 +12,8 @@ from algorithms.replay_buffer import ReplayBuffer, ReplayBufferState, Transition
 from algorithms.sac import SAC
 from environment.cartpole import CartPoleState
 from environment.double_pendulum_cartpole import DoublePendulumCartPoleState
-from .data_structures import EnvType, TrainCarry, UpdateCarry, ChunkCarry, ChunkSummary
-
+from training.data_structures import EnvType, TrainCarry, UpdateCarry, ChunkCarry, ChunkSummary
+from config import DTYPE
 
 EnvStateType = CartPoleState | DoublePendulumCartPoleState
 
@@ -171,7 +171,7 @@ class ChunkTrainer:
         batch = ReplayBuffer.sample(ucc.buffer_state, sample_key, self.batch_size)
         next_sac_state, info = self.sac.update_step(ucc.sac_state, batch, update_key)
 
-        beta = jnp.asarray(self.ema_beta, jnp.float32)
+        beta = jnp.asarray(self.ema_beta, DTYPE)
         return UpdateCarry(
             rng=next_rng,
             sac_state=next_sac_state,
