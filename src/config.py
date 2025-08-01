@@ -11,8 +11,8 @@ from training.data_structures import AutoAlphaConfig, SACConfig
 # ----------------------------
 # Environment settings
 NUM_ENVS = 512
-MAX_EPISODE_STEPS = 2000
 USE_DOUBLE_PENDULUM = True  # Set to True for double pendulum, False for single pendulum
+MAX_EPISODE_STEPS = 1000 if not USE_DOUBLE_PENDULUM else 4000
 
 # Training settings
 TOTAL_UPDATES = 200_000 if not USE_DOUBLE_PENDULUM else 2_000_000

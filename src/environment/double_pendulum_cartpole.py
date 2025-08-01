@@ -9,7 +9,7 @@ DTYPE = jnp.float64
 
 # Default physical parameters for double pendulum
 DEFAULT_PARAMS = {
-    'dt': 1 / 240,
+    'dt': 1 / 200,
     'g': 9.81,
     'length1': 1.2,  # First pendulum length
     'length2': 1.0,  # Second pendulum length
