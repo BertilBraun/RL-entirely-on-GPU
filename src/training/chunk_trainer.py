@@ -214,18 +214,65 @@ class SACChunkTrainer(BaseChunkTrainer):
 class PPOChunkTrainer(BaseChunkTrainer):
     """PPO-specific chunk trainer."""
 
-    def _single_update(self, ucc: UpdateCarry, _) -> Tuple[UpdateCarry, None]:
-        """Perform a single PPO parameter update."""
+    def _perform_parameter_updates(
+        self,
+        rng: chex.PRNGKey,
+        carry: ChunkCarry,
+        buffer_state: BufferStateType,
+        env_state: EnvStateType,
+        obs: chex.Array,
+        env_steps: chex.Array,
+        episode_rewards: chex.Array,
+        step_reward: chex.Array,
+    ) -> ChunkCarry:
+        """Perform PPO parameter updates with proper epochs and buffer management."""
+        # For PPO, we want to do multiple epochs on the same data before clearing
+        # So we override the base implementation
+
+        # Initialize update carry
+        uc0 = UpdateCarry.init(carry, rng, buffer_state)
+
+        # Do all PPO epochs on the same data
+        uc_final, _ = jax.lax.scan(self._single_update_no_clear, uc0, xs=None, length=self.updates_per_step)
+
+        # Clear buffer ONLY after all epochs are complete
+        from algorithms.episode_buffer import EpisodeBuffer
+
+        cleared_buffer_state = EpisodeBuffer.clear_buffer(uc_final.buffer_state)
+
+        # Update reward EMA
+        step_reward_mean = jnp.mean(step_reward)
+        reward_ema_updated = (1 - self.reward_ema_beta) * carry.reward_ema + self.reward_ema_beta * step_reward_mean
+
+        # Create updated carry with cleared buffer
+        return ChunkCarry(
+            train=TrainCarry(
+                rng=uc_final.rng,
+                algorithm_state=uc_final.algorithm_state,
+                buffer_state=cleared_buffer_state,  # Use cleared buffer
+                env_state=env_state,
+                obs=obs,
+                env_steps=env_steps,
+                episode_rewards=episode_rewards,
+                total_updates_done=uc_final.total_updates_done,
+            ),
+            chunk_updates_done=uc_final.chunk_updates_done,
+            actor_loss_ema=uc_final.actor_loss_ema,
+            critic_loss_ema=uc_final.critic_loss_ema,
+            alpha_ema=uc_final.alpha_ema,
+            q_ema=uc_final.q_ema,
+            reward_ema=reward_ema_updated,
+        )
+
+    def _single_update_no_clear(self, ucc: UpdateCarry, _) -> Tuple[UpdateCarry, None]:
+        """Perform a single PPO parameter update WITHOUT clearing buffer."""
         next_rng, sample_key, update_key = jax.random.split(ucc.rng, 3)
 
         # PPO batch preparation and update
         batch = self.algorithm.prepare_update_batch(ucc.buffer_state, sample_key, self.batch_size)
         next_algorithm_state, info = self.algorithm.update_step(ucc.algorithm_state, batch, update_key)
 
-        # Clear the episode buffer after PPO update (critical for PPO!)
-        from algorithms.episode_buffer import EpisodeBuffer
-
-        cleared_buffer_state = EpisodeBuffer.clear_buffer(ucc.buffer_state)
+        # DON'T clear buffer - keep using the same data for multiple epochs
 
         # Extract PPO-specific metrics
         actor_loss = info.policy_info.policy_loss
@@ -237,7 +284,7 @@ class PPOChunkTrainer(BaseChunkTrainer):
         return UpdateCarry(
             rng=next_rng,
             algorithm_state=next_algorithm_state,
-            buffer_state=cleared_buffer_state,  # Use cleared buffer
+            buffer_state=ucc.buffer_state,  # Keep same buffer for next epoch
             total_updates_done=ucc.total_updates_done + 1,
             chunk_updates_done=ucc.chunk_updates_done + 1,
             actor_loss_ema=(1 - beta) * ucc.actor_loss_ema + beta * actor_loss,
@@ -245,6 +292,11 @@ class PPOChunkTrainer(BaseChunkTrainer):
             alpha_ema=(1 - beta) * ucc.alpha_ema + beta * alpha,
             q_ema=(1 - beta) * ucc.q_ema + beta * q_mean,
         ), None
+
+    def _single_update(self, ucc: UpdateCarry, _) -> Tuple[UpdateCarry, None]:
+        """This method is not used for PPO - we use _single_update_no_clear instead."""
+        # This should never be called for PPO, but just in case
+        return self._single_update_no_clear(ucc, _)
 
 
 def create_chunk_trainer(

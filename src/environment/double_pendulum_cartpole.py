@@ -226,242 +226,6 @@ def get_obs(
 
 
 @jax.jit
-def reward_fn_old(
-    state: DoublePendulumCartPoleState, force: chex.Array, length1: float, length2: float, rail_limit: float
-) -> chex.Array:
-    """
-    Reward function for double pendulum encouraging both pendulums to be upright.
-    """
-    # Reward for both pendulums being upright
-    upright1 = 2.0 * jnp.exp(-(state.theta1**2) / (0.12**2))
-    upright2 = 2.0 * jnp.exp(-(state.theta2**2) / (0.12**2))
-
-    # Cosine rewards (smooth reward for being near upright)
-    cos_reward1 = jnp.cos(state.theta1)
-    cos_reward2 = jnp.cos(state.theta2)
-
-    # Penalties for high velocities and position
-    position_penalty = 0.05 * (state.x**2)
-    velocity_penalties = 0.01 * (state.x_dot**2) + 0.01 * (state.theta1_dot**2) + 0.01 * (state.theta2_dot**2)
-
-    # Control effort penalty
-    control_penalty = 1e-4 * (force**2)
-
-    # Boundary penalty
-    boundary_penalty = jnp.where(jnp.abs(state.x) >= rail_limit - 0.5, 3, 0)
-
-    r = (
-        cos_reward1
-        + cos_reward2
-        + upright1
-        + upright2
-        - position_penalty
-        - velocity_penalties
-        - control_penalty
-        - boundary_penalty
-    ) * 0.5
-
-    return r
-
-
-@jax.jit
-def reward_fn_old_1(
-    state: DoublePendulumCartPoleState,
-    force: chex.Array,
-    length1: float,
-    length2: float,
-    rail_limit: float,
-    max_base_speed: float = 10.0,
-    max_speed: float = 10.0,
-    max_force: float = 100.0,
-) -> chex.Array:
-    """
-    Bounded, cost-style reward:
-      r = - (wθ * angle_cost + wv * vel_cost + wx * pos_cost + wu * control_cost + wb * boundary_cost)
-
-    Scales all terms to be dimensionless and softly clipped so nothing explodes.
-    The best attainable reward is ~0.
-    """
-
-    # --- helpers ---
-    def huber(x, k=1.0):
-        # Smooth L1; ~0.5*(x/k)^2 for |x|<=k, ~|x|/k - 0.5 otherwise
-        ax = jnp.abs(x)
-        return jnp.where(ax <= k, 0.5 * (x / k) ** 2, ax / k - 0.5)
-
-    # Angles are already wrapped in your step function; just in case:
-    th1 = _wrap_angle(state.theta1)
-    th2 = _wrap_angle(state.theta2)
-
-    # --- angle cost (0 at upright, ~2 at inverted) ---
-    # Using 1 - cos(theta): smooth, bounded in [0, 2]
-    angle_cost = (1.0 - jnp.cos(th1)) + (1.0 - jnp.cos(th2))
-
-    # --- angular velocity cost ---
-    th1d_n = state.theta1_dot / max_speed
-    th2d_n = state.theta2_dot / max_speed
-    ang_vel_cost = huber(th1d_n, k=1.0) + huber(th2d_n, k=1.0)
-
-    # --- cart position & velocity costs ---
-    x_n = state.x / rail_limit  # in [-1, 1] normally
-    xd_n = state.x_dot / max_base_speed
-    pos_cost = huber(x_n, k=1.0)  # softly penalize |x|>0
-    base_vel_cost = huber(xd_n, k=1.0)
-
-    # --- control effort (scaled) ---
-    u_n = force / max_force
-    control_cost = 0.5 * (u_n**2)  # simple quadratic, bounded by 0.5
-
-    # --- boundary barrier (smooth, only near rails) ---
-    # Kicks in when |x| > rail_limit - margin; softplus keeps it smooth & bounded per step
-    margin = 0.5
-    over = jnp.maximum(jnp.abs(state.x) - (rail_limit - margin), 0.0)
-    boundary_cost = jnp.log1p(jnp.exp(10.0 * (over / margin))) / 10.0  # softplus with scale
-
-    # --- weights (tune here) ---
-    w_theta = 1.0  # uprightness is primary
-    w_vel = 0.15  # damp angular speed
-    w_pos = 0.25  # keep cart centered
-    w_bvel = 0.05  # don't rush the cart
-    w_u = 0.005  # gentle effort regularizer
-    w_bound = 1.0  # strongly discourage rail contact
-
-    total_cost = (
-        w_theta * angle_cost
-        + w_vel * ang_vel_cost
-        + w_pos * pos_cost
-        + w_bvel * base_vel_cost
-        + w_u * control_cost
-        + w_bound * boundary_cost
-    )
-
-    # Reward is negative cost; clip to a tidy range to stabilize Q-targets
-    r = -total_cost
-    r = jnp.clip(r, -5.0, 0.0)
-    return r
-
-
-@jax.jit
-def reward_fn_old_2(
-    state: DoublePendulumCartPoleState,
-    force: chex.Array,
-    rail_limit: float,
-    max_base_speed: float = 10.0,
-    max_speed: float = 10.0,
-    max_force: float = 100.0,
-) -> chex.Array:
-    """Bounded reward in [-5, 0]; best is 0. Uses NEXT state to avoid action-spike exploits."""
-
-    # --- helpers ---
-    def huber(x, k=1.0):
-        ax = jnp.abs(x)
-        return jnp.where(ax <= k, 0.5 * (x / k) ** 2, ax / k - 0.5)
-
-    th1 = _wrap_angle(state.theta1)
-    th2 = _wrap_angle(state.theta2)
-
-    # Uprightness (bounded 0..2 per link)
-    upright_cost = (1 - jnp.cos(th1)) + (1 - jnp.cos(th2))
-
-    # Keep both links aligned around upright (penalize relative hinge motion)
-    relative_cost = 0.5 * (1 - jnp.cos(th1 - th2))  # 0 when aligned
-
-    # Angular velocity (normalized + Huber)
-    th1d = huber(state.theta1_dot / max_speed, k=1.0)
-    th2d = huber(state.theta2_dot / max_speed, k=1.0)
-    ang_vel_cost = th1d + th2d
-
-    # Cart position/velocity (normalized + Huber)
-    x_cost = huber(state.x / rail_limit, k=1.0)
-    xd_cost = huber(state.x_dot / max_base_speed, k=1.0)
-
-    # Control (normalized)
-    u_cost = 0.5 * (force / max_force) ** 2
-
-    # Smooth rail barrier (activates in last 0.4 m)
-    margin = 0.4
-    over = jnp.maximum(jnp.abs(state.x) - (rail_limit - margin), 0.0) / margin
-    boundary_cost = jnp.log1p(jnp.exp(8.0 * over)) / 8.0
-
-    # Weights
-    w_upright = 1.8
-    w_rel = 0.6
-    w_angv = 0.2
-    w_x = 0.1
-    w_xd = 0.05
-    w_u = 0.005
-    w_bound = 1.5
-
-    cost = (
-        w_upright * upright_cost
-        + w_rel * relative_cost
-        + w_angv * ang_vel_cost
-        + w_x * x_cost
-        + w_xd * xd_cost
-        + w_u * u_cost
-        + w_bound * boundary_cost
-    )
-
-    r = -cost
-    return jnp.clip(r, -5.0, 0.0)
-
-
-@jax.jit
-def reward_fn_old_3(
-    state: DoublePendulumCartPoleState,
-    force: chex.Array,
-    rail_limit: float,
-    max_base_speed: float = 10.0,
-    max_speed: float = 10.0,
-    max_force: float = 100.0,
-) -> chex.Array:
-    def huber(x, k=2.0):  # wider k so typical resets aren’t penalized too hard
-        ax = jnp.abs(x)
-        return jnp.where(ax <= k, 0.5 * (x / k) ** 2, ax / k - 0.5)
-
-    th1 = _wrap_angle(state.theta1)
-    th2 = _wrap_angle(state.theta2)
-
-    upright_cost = (1 - jnp.cos(th1)) + (1 - jnp.cos(th2))  # ∈ [0, 4]
-    relative_cost = 0.5 * (1 - jnp.cos(th1 - th2))  # ∈ [0, 1]
-
-    ang_vel_cost = huber(state.theta1_dot / max_speed) + huber(state.theta2_dot / max_speed)
-
-    x_cost = huber(state.x / rail_limit)
-    xd_cost = huber(state.x_dot / max_base_speed)
-
-    u_cost = 0.5 * (force / max_force) ** 2
-
-    # gentler barrier; activates in last 0.6 m
-    margin = 0.6
-    over = jnp.maximum(jnp.abs(state.x) - (rail_limit - margin), 0.0) / margin
-    boundary_cost = jnp.log1p(jnp.exp(5.0 * over)) / 5.0
-
-    # ↓ scales reduced ~×0.5 from previous suggestion
-    w_upright = 0.9
-    w_rel = 0.3
-    w_angv = 0.1
-    w_x = 0.15
-    w_xd = 0.03
-    w_u = 0.003
-    w_bound = 0.8
-
-    cost = (
-        w_upright * upright_cost
-        + w_rel * relative_cost
-        + w_angv * ang_vel_cost
-        + w_x * x_cost
-        + w_xd * xd_cost
-        + w_u * u_cost
-        + w_bound * boundary_cost
-    )
-
-    # Soft squash instead of hard clip; keeps gradients when cost is big
-    r = -10.0 * jnp.tanh(cost / 10.0)  # ∈ (-10, 0)
-    return r
-
-
-@jax.jit
 def reward_fn(
     state: DoublePendulumCartPoleState,
     force: chex.Array,
@@ -470,36 +234,51 @@ def reward_fn(
     max_speed: float,
     max_force: float,
 ) -> chex.Array:
-    def huber(x, k=2.0):
-        ax = jnp.abs(x)
-        return jnp.where(ax <= k, 0.5 * (x / k) ** 2, ax / k - 0.5)
+    """
+    Improved reward-shaped function for better learning.
 
-    th1 = _wrap_angle(state.theta1)
-    th2 = _wrap_angle(state.theta2)
+    Key improvements:
+    - Positive rewards (0-10 range) instead of negative penalties
+    - Dense feedback with exponential rewards for uprightness
+    - Bonus rewards for achieving multiple goals together
+    """
 
-    upright_cost = (1 - jnp.cos(th1)) + (1 - jnp.cos(th2))  # [0,4]
-    rel_cost = 0.5 * (1 - jnp.cos(th1 - th2))  # [0,1]
-    angv_cost = huber(state.theta1_dot / max_speed) + huber(state.theta2_dot / max_speed)
-    x_cost = huber(state.x / rail_limit)
-    xd_cost = huber(state.x_dot / max_base_speed)
-    u_cost = 0.5 * (force / max_force) ** 2
+    # === PRIMARY OBJECTIVE: UPRIGHTNESS (0-6 total) ===
+    # Strong exponential rewards for each pendulum being upright
+    upright_reward_1 = 3.0 * jnp.exp(-2.0 * state.theta1**2)
+    upright_reward_2 = 3.0 * jnp.exp(-2.0 * state.theta2**2)
 
-    boundary_cost = jnp.where(jnp.abs(state.x) >= rail_limit - 1.0, 10.0, 0.0)
+    # === STABILITY BONUS (0-2 total) ===
+    # Reward stable, controlled movement
+    stability_bonus_1 = 1.0 * jnp.exp(-0.1 * state.theta1_dot**2)
+    stability_bonus_2 = 1.0 * jnp.exp(-0.1 * state.theta2_dot**2)
 
-    # modest weights so typical resets aren't saturated
-    wθ, wrel, wω, wx, wxd, wu, wb = 1.5, 0.3, 0.1, 0.15, 0.03, 0.003, 2.5
-    cost = (
-        wθ * upright_cost
-        + wrel * rel_cost
-        + wω * angv_cost
-        + wx * x_cost
-        + wxd * xd_cost
-        + wu * u_cost
-        + wb * boundary_cost
+    # === POSITION CONTROL (0-1 total) ===
+    # Gentle reward for keeping cart centered
+    position_bonus = 1.0 * jnp.exp(-0.25 * state.x**2)
+
+    # === PERFECT CONTROL BONUS (0-2 total) ===
+    # Big bonus when everything is working well together
+    both_upright = (jnp.abs(state.theta1) < 0.5) & (jnp.abs(state.theta2) < 0.5)
+    both_stable = (jnp.abs(state.theta1_dot) < 2.0) & (jnp.abs(state.theta2_dot) < 2.0)
+    perfect_bonus = jnp.where(both_upright & both_stable, 2.0, 0.0)
+
+    # === BOUNDARY SAFETY ===
+    # Smooth penalty approaching boundaries
+    boundary_safety = jnp.where(jnp.abs(state.x) > rail_limit * 0.8, -10.0, 0.0)
+
+    # Total reward: 0 to ~12 when perfect, with smooth gradients
+    total_reward = (
+        upright_reward_1
+        + upright_reward_2
+        + stability_bonus_1
+        + stability_bonus_2
+        + position_bonus
+        + perfect_bonus
+        + boundary_safety
     )
 
-    # soft squash keeps gradients at large cost, but bounds scale
-    return -5.0 * jnp.tanh(cost / 5.0)
+    return total_reward
 
 
 @jax.jit
