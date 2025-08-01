@@ -525,9 +525,10 @@ class DoublePendulumCartPoleEnv:
         g: float = DEFAULT_PARAMS['g'],
         length1: float = DEFAULT_PARAMS['length1'],
         length2: float = DEFAULT_PARAMS['length2'],
+        M: float = DEFAULT_PARAMS['M'],
         m1: float = DEFAULT_PARAMS['m1'],
         m2: float = DEFAULT_PARAMS['m2'],
-        M: float = DEFAULT_PARAMS['M'],
+        x_damp: float = DEFAULT_PARAMS['x_damp'],
         theta_damp1: float = DEFAULT_PARAMS['theta_damp1'],
         theta_damp2: float = DEFAULT_PARAMS['theta_damp2'],
     ) -> None:
@@ -548,9 +549,10 @@ class DoublePendulumCartPoleEnv:
             g=g,
             length1=length1,
             length2=length2,
+            M=M,
             m1=m1,
             m2=m2,
-            M=M,
+            x_damp=x_damp,
             theta_damp1=theta_damp1,
             theta_damp2=theta_damp2,
         )
