@@ -163,55 +163,15 @@ class PPO(Algorithm):
 
         return EpisodeBuffer.add_step(buffer_state, obs, action, reward, value_squeezed, log_prob_squeezed, done)
 
-    def prepare_update_batch(self, buffer_state: Any, key: chex.PRNGKey, batch_size: int) -> PPOBatch:
-        """Prepare PPO training batch from episode buffer with GAE."""
-        episodes = buffer_state.episodes
-        current_step = buffer_state.current_step
-
-        # Simple approach: reshape entire buffer and handle validity in downstream processing
-        num_envs = episodes.obs.shape[1]
-        obs_dim = episodes.obs.shape[2]
-        action_dim = episodes.actions.shape[2]
-        max_steps = episodes.obs.shape[0]
-
-        # Reshape entire buffer to flattened form
-        total_size = max_steps * num_envs
-        obs_batch = episodes.obs.reshape(total_size, obs_dim)
-        actions_batch = episodes.actions.reshape(total_size, action_dim)
-        old_log_probs_batch = episodes.log_probs.reshape(total_size)
-        rewards_batch = episodes.rewards.reshape(total_size)
-        values_batch = episodes.values.reshape(total_size)
-        dones_batch = episodes.dones.reshape(total_size)
-
-        # Compute advantages using GAE on entire buffer
-        advantages_batch, returns_batch = self._compute_gae_advantages(
-            rewards_batch, values_batch, dones_batch, num_envs
-        )
-
-        # Calculate how much valid data we have and use fixed slicing
-        # Use the static batch_size directly to avoid traced value issues
-
-        # Use the first batch_size elements - this uses static slicing
-        obs_batch = jax.lax.dynamic_slice(obs_batch, (0, 0), (batch_size, obs_dim))
-        actions_batch = jax.lax.dynamic_slice(actions_batch, (0, 0), (batch_size, action_dim))
-        old_log_probs_batch = jax.lax.dynamic_slice(old_log_probs_batch, (0,), (batch_size,))
-        advantages_batch = jax.lax.dynamic_slice(advantages_batch, (0,), (batch_size,))
-        returns_batch = jax.lax.dynamic_slice(returns_batch, (0,), (batch_size,))
-
-        return PPOBatch(
-            obs=obs_batch,
-            actions=actions_batch,
-            old_log_probs=old_log_probs_batch,
-            advantages=advantages_batch,
-            returns=returns_batch,
-        )
-
     def _compute_gae_advantages(
         self, rewards: chex.Array, values: chex.Array, dones: chex.Array, num_envs: int
     ) -> Tuple[chex.Array, chex.Array]:
-        """Compute advantages using Generalized Advantage Estimation (GAE)."""
+        """Compute advantages using Generalized Advantage Estimation (GAE) - only on valid data."""
         # Reshape to (steps, num_envs) for proper GAE computation
-        steps = rewards.shape[0] // num_envs
+        # Note: This assumes data is laid out sequentially: [step0_env0, step0_env1, ..., step1_env0, step1_env1, ...]
+        total_elements = rewards.shape[0]
+        steps = total_elements // num_envs
+
         rewards_2d = rewards.reshape(steps, num_envs)
         values_2d = values.reshape(steps, num_envs)
         dones_2d = dones.reshape(steps, num_envs)
@@ -244,6 +204,45 @@ class PPO(Algorithm):
         returns = advantages + values
 
         return advantages, returns
+
+    def prepare_update_batch(self, buffer_state: Any, key: chex.PRNGKey, batch_size: int) -> PPOBatch:
+        """Prepare PPO training batch from episode buffer with GAE - ONLY valid data."""
+        episodes = buffer_state.episodes
+
+        # Simple approach: reshape episodes and take first batch_size elements
+        # This works because episode data is stored sequentially and we clear buffer after updates
+        num_envs = episodes.obs.shape[1]
+        obs_dim = episodes.obs.shape[2]
+        action_dim = episodes.actions.shape[2]
+
+        # Reshape episodes to flat form
+        obs_flat = episodes.obs.reshape(-1, obs_dim)
+        actions_flat = episodes.actions.reshape(-1, action_dim)
+        log_probs_flat = episodes.log_probs.reshape(-1)
+        rewards_flat = episodes.rewards.reshape(-1)
+        values_flat = episodes.values.reshape(-1)
+        dones_flat = episodes.dones.reshape(-1)
+
+        # Take first batch_size elements (static slicing, no traced values)
+        obs_batch = jax.lax.dynamic_slice(obs_flat, (0, 0), (batch_size, obs_dim))
+        actions_batch = jax.lax.dynamic_slice(actions_flat, (0, 0), (batch_size, action_dim))
+        log_probs_batch = jax.lax.dynamic_slice(log_probs_flat, (0,), (batch_size,))
+        rewards_batch = jax.lax.dynamic_slice(rewards_flat, (0,), (batch_size,))
+        values_batch = jax.lax.dynamic_slice(values_flat, (0,), (batch_size,))
+        dones_batch = jax.lax.dynamic_slice(dones_flat, (0,), (batch_size,))
+
+        # Compute GAE on the batch
+        advantages_batch, returns_batch = self._compute_gae_advantages(
+            rewards_batch, values_batch, dones_batch, num_envs
+        )
+
+        return PPOBatch(
+            obs=obs_batch,
+            actions=actions_batch,
+            old_log_probs=log_probs_batch,
+            advantages=advantages_batch,
+            returns=returns_batch,
+        )
 
     @partial(jax.jit, static_argnums=0)
     def update_step(self, state: PPOState, batch: PPOBatch, key: chex.PRNGKey) -> Tuple[PPOState, PPOInfo]:

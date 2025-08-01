@@ -222,6 +222,11 @@ class PPOChunkTrainer(BaseChunkTrainer):
         batch = self.algorithm.prepare_update_batch(ucc.buffer_state, sample_key, self.batch_size)
         next_algorithm_state, info = self.algorithm.update_step(ucc.algorithm_state, batch, update_key)
 
+        # Clear the episode buffer after PPO update (critical for PPO!)
+        from algorithms.episode_buffer import EpisodeBuffer
+
+        cleared_buffer_state = EpisodeBuffer.clear_buffer(ucc.buffer_state)
+
         # Extract PPO-specific metrics
         actor_loss = info.policy_info.policy_loss
         critic_loss = info.value_info.value_loss
@@ -232,7 +237,7 @@ class PPOChunkTrainer(BaseChunkTrainer):
         return UpdateCarry(
             rng=next_rng,
             algorithm_state=next_algorithm_state,
-            buffer_state=ucc.buffer_state,
+            buffer_state=cleared_buffer_state,  # Use cleared buffer
             total_updates_done=ucc.total_updates_done + 1,
             chunk_updates_done=ucc.chunk_updates_done + 1,
             actor_loss_ema=(1 - beta) * ucc.actor_loss_ema + beta * actor_loss,
