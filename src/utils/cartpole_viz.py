@@ -1,30 +1,12 @@
 import pygame
 import numpy as np
-from PIL import Image
 from typing import Tuple
-from dataclasses import dataclass
 
 from environment.cartpole import CartPoleState
+from utils.base_live_viz import BaseLiveVisualizer, Colors, Point
 
 
-@dataclass
-class Point:
-    x: float
-    y: float
-
-
-class Colors:
-    background = (240, 240, 240)
-    rail = (50, 50, 200)
-    cart = (50, 100, 200)
-    pendulum = (200, 50, 50)
-    bob = (150, 50, 50)
-    trail = (200, 50, 50, 100)
-    text = (0, 0, 0)
-    reward_zone = (50, 200, 50, 80)
-
-
-class CartPoleLiveVisualizer:
+class CartPoleLiveVisualizer(BaseLiveVisualizer):
     """
     Real-time pygame-based visualization for cart-pole environments during training.
     """
@@ -37,54 +19,12 @@ class CartPoleLiveVisualizer:
         window_size: Tuple[int, int] = (800, 600),
         should_save: bool = False,
     ):
-        self.num_cartpoles = min(num_cartpoles, 4)  # Limit to 4 for display
+        super().__init__(num_cartpoles, rail_limit, window_size, should_save)
         self.length = length  # Pendulum length
-        self.rail_limit = rail_limit
-        self.window_size = window_size
-        self.should_save = should_save
-        self.frames = []
-
-        # Initialize pygame
-        self.screen = pygame.display.set_mode(window_size)
-        pygame.display.set_caption('Cart-Pole Live Training')
-
-        # Calculate layout for multiple cartpoles
-        if self.num_cartpoles == 1:
-            self.offsets = [(0, 0)]
-        elif self.num_cartpoles == 2:
-            self.offsets = [(-self.window_size[0] // 4, 0), (self.window_size[0] // 4, 0)]
-        elif self.num_cartpoles <= 4:
-            self.offsets = [
-                (-self.window_size[0] // 4, -self.window_size[1] // 4),
-                (self.window_size[0] // 4, -self.window_size[1] // 4),
-                (-self.window_size[0] // 4, self.window_size[1] // 4),
-                (self.window_size[0] // 4, self.window_size[1] // 4),
-            ]
-        else:
-            raise ValueError(f'Number of cartpoles must be between 1 and 4, got {self.num_cartpoles}')
-
-        # Calculate display scaling
-        elements_on_x = 2 if self.num_cartpoles > 1 else 1
-        elements_on_y = 2 if self.num_cartpoles > 2 else 1
-        scale_x = window_size[0] / (2 * rail_limit * elements_on_x)
-        scale_y = window_size[1] / (2 * length * elements_on_y)
-        self.scale = min(scale_x, scale_y) * 0.8
-        self.center_x = window_size[0] // 2
-        self.center_y = window_size[1] // 2
 
         # Trail data for pendulum bob
         self.trail_data: list[list[Point]] = [[] for _ in range(self.num_cartpoles)]
-        self.max_trail_length = 50
-
-        # Font for text
-        pygame.font.init()
-        self.font = pygame.font.Font(pygame.font.get_default_font(), 24)
-
-    def world_to_screen(self, x: float, y: float) -> Tuple[int, int]:
-        """Convert world coordinates to screen coordinates."""
-        screen_x = int(self.center_x + x * self.scale)
-        screen_y = int(self.center_y - y * self.scale)  # Flip Y axis
-        return screen_x, screen_y
+        self.max_trail_length = 30
 
     def update(self, state: CartPoleState, step: int, rewards: np.ndarray) -> None:
         """
@@ -97,13 +37,7 @@ class CartPoleLiveVisualizer:
         Returns:
             bool: True if visualization should continue, False if user closed window
         """
-        # Handle pygame events
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                exit()
-
-        # Clear screen
-        self.screen.fill(Colors.background)
+        self._base_update(step)
 
         # Limit to number of cartpoles we're visualizing
         rewards = rewards[: self.num_cartpoles]
@@ -203,44 +137,9 @@ class CartPoleLiveVisualizer:
                 self.screen.blit(obs_text, (offset_x + self.center_x + 10, obs_y))
                 obs_y += 25
 
-        # Draw episode information
-        info_y = 10
-        info_texts = [f'Step: {step}']
-
-        for text_str in info_texts:
-            text = self.font.render(text_str, True, Colors.text)
-            self.screen.blit(text, (10, info_y))
-            info_y += 25
-
-        # Update display
-        pygame.display.flip()
-        if self.should_save:
-            x3 = pygame.surfarray.array3d(self.screen)
-            x3 = np.moveaxis(x3, 0, 1)
-            array = Image.fromarray(np.uint8(x3))
-            self.frames.append(array)
+        self._update_display()
 
     def clear_trails(self):
         """Clear all pendulum trails."""
         for i in range(self.num_cartpoles):
             self.trail_data[i] = []
-
-    def close(self):
-        """Close the pygame window."""
-        pygame.quit()
-
-    def save_frames(self, path: str, fps: int = 60):
-        """Save the frames to a gif file."""
-        if not self.should_save:
-            raise ValueError('Frames not saved because should_save is False')
-        if not self.frames:
-            raise ValueError('No frames to save')
-
-        self.frames[0].save(
-            path,
-            save_all=True,
-            optimize=False,
-            append_images=self.frames[1:],
-            loop=0,
-            duration=int(1000 / fps),  # display time of each frame in ms
-        )

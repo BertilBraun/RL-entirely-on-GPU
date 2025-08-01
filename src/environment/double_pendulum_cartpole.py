@@ -8,16 +8,16 @@ from typing import Callable, Tuple
 # Default physical parameters for double pendulum
 DEFAULT_PARAMS = {
     'dt': 1 / 120,
-    'g': -9.81,
+    'g': 9.81,
     'length1': 1.0,  # First pendulum length
     'length2': 1.0,  # Second pendulum length
     'm1': 0.1,  # First pendulum mass
-    'm2': 0.1,  # Second pendulum mass
+    'm2': 0.01,  # Second pendulum mass
     'M': 1.0,  # Cart mass
     'max_speed': 10.0,  # TODO reduce
     'max_base_speed': 10.0,  # TODO reduce
     'max_force': 100.0,  # TODO reduce
-    'rail_limit': 4.0,  # base can move between -4 and 4
+    'rail_limit': 5.0,  # base can move between -5 and 5
     'theta_damp1': 0.00,  # First pole rotational damping
     'theta_damp2': 0.00,  # Second pole rotational damping
 }
@@ -67,7 +67,7 @@ def _lagrangian(positions: chex.Array, velocities: chex.Array, params: Params) -
     xd, th1d, th2d = velocities  # type: ignore
     l1, l2 = params.length1, params.length2
     m1, m2, M = params.m1, params.m2, params.M
-    g = params.g
+    g = -params.g
 
     # Link COM positions in cart frame (pivot at cart, y down)
     # Using full-length rods; if your COM is at l/2, replace l -> l/2 below.
@@ -220,7 +220,7 @@ def get_obs(
 
 
 @jax.jit
-def reward_fn(
+def reward_fn_old(
     state: DoublePendulumCartPoleState, force: chex.Array, length1: float, length2: float, rail_limit: float
 ) -> chex.Array:
     """
@@ -253,8 +253,85 @@ def reward_fn(
         - velocity_penalties
         - control_penalty
         - boundary_penalty
+    ) * 0.5
+
+    return r
+
+
+@jax.jit
+def reward_fn(
+    state: DoublePendulumCartPoleState,
+    force: chex.Array,
+    length1: float,
+    length2: float,
+    rail_limit: float,
+    max_base_speed: float = 10.0,
+    max_speed: float = 10.0,
+    max_force: float = 100.0,
+) -> chex.Array:
+    """
+    Bounded, cost-style reward:
+      r = - (wθ * angle_cost + wv * vel_cost + wx * pos_cost + wu * control_cost + wb * boundary_cost)
+
+    Scales all terms to be dimensionless and softly clipped so nothing explodes.
+    The best attainable reward is ~0.
+    """
+
+    # --- helpers ---
+    def huber(x, k=1.0):
+        # Smooth L1; ~0.5*(x/k)^2 for |x|<=k, ~|x|/k - 0.5 otherwise
+        ax = jnp.abs(x)
+        return jnp.where(ax <= k, 0.5 * (x / k) ** 2, ax / k - 0.5)
+
+    # Angles are already wrapped in your step function; just in case:
+    th1 = _wrap_angle(state.theta1)
+    th2 = _wrap_angle(state.theta2)
+
+    # --- angle cost (0 at upright, ~2 at inverted) ---
+    # Using 1 - cos(theta): smooth, bounded in [0, 2]
+    angle_cost = (1.0 - jnp.cos(th1)) + (1.0 - jnp.cos(th2))
+
+    # --- angular velocity cost ---
+    th1d_n = state.theta1_dot / max_speed
+    th2d_n = state.theta2_dot / max_speed
+    ang_vel_cost = huber(th1d_n, k=1.0) + huber(th2d_n, k=1.0)
+
+    # --- cart position & velocity costs ---
+    x_n = state.x / rail_limit  # in [-1, 1] normally
+    xd_n = state.x_dot / max_base_speed
+    pos_cost = huber(x_n, k=1.0)  # softly penalize |x|>0
+    base_vel_cost = huber(xd_n, k=1.0)
+
+    # --- control effort (scaled) ---
+    u_n = force / max_force
+    control_cost = 0.5 * (u_n**2)  # simple quadratic, bounded by 0.5
+
+    # --- boundary barrier (smooth, only near rails) ---
+    # Kicks in when |x| > rail_limit - margin; softplus keeps it smooth & bounded per step
+    margin = 0.5
+    over = jnp.maximum(jnp.abs(state.x) - (rail_limit - margin), 0.0)
+    boundary_cost = jnp.log1p(jnp.exp(10.0 * (over / margin))) / 10.0  # softplus with scale
+
+    # --- weights (tune here) ---
+    w_theta = 1.0  # uprightness is primary
+    w_vel = 0.15  # damp angular speed
+    w_pos = 0.25  # keep cart centered
+    w_bvel = 0.05  # don't rush the cart
+    w_u = 0.005  # gentle effort regularizer
+    w_bound = 1.0  # strongly discourage rail contact
+
+    total_cost = (
+        w_theta * angle_cost
+        + w_vel * ang_vel_cost
+        + w_pos * pos_cost
+        + w_bvel * base_vel_cost
+        + w_u * control_cost
+        + w_bound * boundary_cost
     )
 
+    # Reward is negative cost; clip to a tidy range to stabilize Q-targets
+    r = -total_cost
+    r = jnp.clip(r, -5.0, 0.0)
     return r
 
 

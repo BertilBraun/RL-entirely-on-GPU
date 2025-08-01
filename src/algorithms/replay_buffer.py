@@ -38,7 +38,7 @@ class ReplayBuffer:
         self.obs_dim = obs_dim
         self.action_dim = action_dim
 
-    def init_buffer_state(self, key: chex.PRNGKey) -> ReplayBufferState:
+    def init_buffer_state(self) -> ReplayBufferState:
         """Initialize empty buffer state."""
         # Initialize with zeros
         data = Transition(

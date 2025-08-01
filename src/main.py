@@ -50,12 +50,12 @@ def setup_environment_and_agent(rng: jax.Array) -> TrainingSetup:
         env = CartPoleEnv(num_envs=NUM_ENVS)
     sac = SAC(obs_dim=env.obs_dim, action_dim=env.action_dim, max_action=env.max_force, config=SAC_CONFIG)
 
-    rng, sac_key, buf_key, reset_key = jax.random.split(rng, 4)
+    rng, sac_key, reset_key = jax.random.split(rng, 3)
     sac_state = sac.init_state(sac_key)
     sac_state = sac_state.try_load()
 
     replay_buffer = ReplayBuffer(capacity=BUFFER_CAPACITY, obs_dim=env.obs_dim, action_dim=env.action_dim)
-    buffer_state = replay_buffer.init_buffer_state(buf_key)
+    buffer_state = replay_buffer.init_buffer_state()
 
     # Initial obs/state via functional reset
     obs0, env_state0 = env.reset(reset_key)
@@ -102,7 +102,10 @@ def print_training_info() -> None:
     print(f'🚀 Starting JAX-based SAC for {env_type} (Chunked GPU Training)')
     print('=' * 80)
     print(f'Environment: {NUM_ENVS} {env_type.lower()}(s)')
-    print(f'Network: {SAC_CONFIG.hidden_dims} | LR: {SAC_CONFIG.learning_rate}')
+    print('Network:')
+    print(f'- Actor {SAC_CONFIG.actor_hidden_dims}')
+    print(f'- Critic {SAC_CONFIG.critic_hidden_dims}')
+    print(f'- LR: {SAC_CONFIG.learning_rate}')
     print(f'Updates: total={TOTAL_UPDATES}, per-step={UPDATES_PER_STEP}, per-chunk={STEPS_PER_GPU_CHUNK}')
     print(f'Max episode steps: {MAX_EPISODE_STEPS} | Batch size: {BATCH_SIZE}')
     print('=' * 80)
@@ -219,7 +222,7 @@ def run_pendulums_viz(rng: chex.PRNGKey, sac: SAC, sac_state: SACState) -> None:
         if jnp.any(done):
             break
 
-    live_viz.save_frames(filename)
+    live_viz.save_frames(filename, fps=120 if USE_DOUBLE_PENDULUM else 60)
     print(f'📁 Visualization saved as {filename}')
 
 

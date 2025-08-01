@@ -35,9 +35,11 @@ class SACConfig(NamedTuple):
     learning_rate: float = 3e-4
     gamma: float = 0.99
     tau: float = 0.005
+    grad_clip: float = 10.0
     alpha_config: AutoAlphaConfig | ManualAlphaConfig = AutoAlphaConfig()
     target_entropy: float | None = None
-    hidden_dims: Tuple[int, ...] = (32, 32)
+    actor_hidden_dims: Tuple[int, ...] = (32, 32)
+    critic_hidden_dims: Tuple[int, ...] = (32, 32)
 
 
 class SACState(NamedTuple):
@@ -121,13 +123,19 @@ class SAC:
             self.target_entropy = config.target_entropy
 
         # Create networks
-        self.actor = ActorNetwork(hidden_dims=config.hidden_dims, action_dim=action_dim, max_action=max_action)
+        self.actor = ActorNetwork(hidden_dims=config.actor_hidden_dims, action_dim=action_dim, max_action=max_action)
 
-        self.critic = DoubleCriticNetwork(hidden_dims=config.hidden_dims)
+        self.critic = DoubleCriticNetwork(hidden_dims=config.critic_hidden_dims)
 
         # Create optimizers
-        self.actor_optimizer = optax.chain(optax.clip_by_global_norm(10.0), optax.adam(config.learning_rate))
-        self.critic_optimizer = optax.chain(optax.clip_by_global_norm(10.0), optax.adam(config.learning_rate))
+        self.actor_optimizer = optax.chain(
+            optax.clip_by_global_norm(config.grad_clip),
+            optax.adam(config.learning_rate),
+        )
+        self.critic_optimizer = optax.chain(
+            optax.clip_by_global_norm(config.grad_clip),
+            optax.adam(config.learning_rate),
+        )
         if isinstance(config.alpha_config, AutoAlphaConfig):
             self.alpha_optimizer = optax.adam(config.learning_rate)
         else:
