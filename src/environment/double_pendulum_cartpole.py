@@ -484,9 +484,7 @@ def reward_fn(
     xd_cost = huber(state.x_dot / max_base_speed)
     u_cost = 0.5 * (force / max_force) ** 2
 
-    margin = 0.6
-    over = jnp.maximum(jnp.abs(state.x) - (rail_limit - margin), 0.0) / margin
-    boundary_cost = jnp.log1p(jnp.exp(5.0 * over)) / 5.0
+    boundary_cost = jnp.where(jnp.abs(state.x) >= rail_limit - 0.5, 10.0, 0.0)
 
     # modest weights so typical resets aren't saturated
     wθ, wrel, wω, wx, wxd, wu, wb = 1.5, 0.3, 0.1, 0.15, 0.03, 0.003, 2.5
