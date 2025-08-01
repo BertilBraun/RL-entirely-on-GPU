@@ -465,9 +465,9 @@ def reward_fn(
     state: DoublePendulumCartPoleState,
     force: chex.Array,
     rail_limit: float,
-    max_base_speed: float = 6.0,
-    max_speed: float = 8.0,
-    max_force: float = 50.0,
+    max_base_speed: float,
+    max_speed: float,
+    max_force: float,
 ) -> chex.Array:
     def huber(x, k=2.0):
         ax = jnp.abs(x)
@@ -620,8 +620,13 @@ class DoublePendulumCartPoleEnv:
 
         # Reward & outputs
         reward = reward_fn(
-            next_state, force, self.params.length1, self.params.length2, self.rail_limit
-        )  # TODO use state instead of next_state
+            next_state,  # TODO use state instead of next_state
+            force=force,
+            rail_limit=self.rail_limit,
+            max_base_speed=self.max_base_speed,
+            max_speed=self.max_speed,
+            max_force=self.max_force,
+        )
         next_obs = get_obs(next_state, self.rail_limit, self.max_base_speed, self.max_speed)
 
         return next_obs, reward, done, next_state

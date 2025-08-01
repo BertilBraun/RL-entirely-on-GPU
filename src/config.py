@@ -26,7 +26,7 @@ EMA_BETA = 0.01  # smoothing for meters
 if USE_DOUBLE_PENDULUM:
     SAC_CONFIG = SACConfig(
         learning_rate=3e-4,
-        gamma=0.999,
+        gamma=0.995,
         tau=0.005,
         grad_clip=10.0,
         target_entropy=-1.5,
