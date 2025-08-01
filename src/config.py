@@ -43,12 +43,12 @@ if USE_DOUBLE_PENDULUM:
         critic_hidden_dims=(64, 64, 64, 64),
     )
     PPO_CONFIG = PPOConfig(
-        learning_rate=1e-3,  # Increased from 3e-4 for faster learning
-        gamma=0.99,
+        learning_rate=3e-4,  # Reduced for more stable learning
+        gamma=0.995,  # Slightly higher for better long-term planning
         gae_lambda=0.95,
-        clip_ratio=0.2,
-        value_loss_coef=0.5,
-        entropy_coef=0.02,  # Increased from 0.01 for more exploration
+        clip_ratio=0.15,  # Slightly more conservative
+        value_loss_coef=0.25,  # Reduced to prevent value overfitting
+        entropy_coef=0.05,  # Increased for more exploration
         max_grad_norm=0.5,
         ppo_epochs=4,
         num_minibatches=4,

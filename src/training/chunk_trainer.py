@@ -277,7 +277,7 @@ class PPOChunkTrainer(BaseChunkTrainer):
         # Extract PPO-specific metrics
         actor_loss = info.policy_info.policy_loss
         critic_loss = info.value_info.value_loss
-        alpha = jnp.array(0.0, dtype=DTYPE)  # PPO doesn't use alpha
+        alpha = jnp.array(0.05, dtype=DTYPE)  # Show entropy coefficient for PPO instead of 0
         q_mean = info.value_info.value_mean
 
         beta = jnp.asarray(self.ema_beta, dtype=DTYPE)

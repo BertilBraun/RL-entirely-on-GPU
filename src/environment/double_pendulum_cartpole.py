@@ -246,50 +246,63 @@ def reward_fn(
     max_force: float,
 ) -> chex.Array:
     """
-    Improved reward-shaped function for better learning.
+    Balanced reward function for stable double pendulum learning.
 
-    Key improvements:
-    - Positive rewards (0-10 range) instead of negative penalties
-    - Dense feedback with exponential rewards for uprightness
-    - Bonus rewards for achieving multiple goals together
+    Design principles:
+    - Symmetric (no left/right bias)
+    - Smooth gradients for good learning
+    - Balanced component scales
+    - Progressive difficulty
     """
 
-    # === PRIMARY OBJECTIVE: UPRIGHTNESS (0-6 total) ===
-    # Strong exponential rewards for each pendulum being upright
-    upright_reward_1 = 3.0 * jnp.exp(-2.0 * state.theta1**2)
-    upright_reward_2 = 3.0 * jnp.exp(-2.0 * state.theta2**2)
+    # === UPRIGHTNESS REWARD (0-4 total) ===
+    # Softer exponentials for smoother gradients
+    upright_1 = 2.0 * jnp.exp(-0.5 * state.theta1**2)  # Less steep
+    upright_2 = 2.0 * jnp.exp(-0.5 * state.theta2**2)
 
-    # === STABILITY BONUS (0-2 total) ===
-    # Reward stable, controlled movement
-    stability_bonus_1 = 1.0 * jnp.exp(-0.1 * state.theta1_dot**2)
-    stability_bonus_2 = 1.0 * jnp.exp(-0.1 * state.theta2_dot**2)
+    # === STABILITY REWARD (0-2 total) ===
+    # Reward low angular velocities
+    stable_1 = 1.0 * jnp.exp(-0.05 * state.theta1_dot**2)  # Even softer
+    stable_2 = 1.0 * jnp.exp(-0.05 * state.theta2_dot**2)
 
-    # === POSITION CONTROL (0-1 total) ===
-    # Gentle reward for keeping cart centered
-    position_bonus = 1.0 * jnp.exp(-0.25 * state.x**2)
+    # === POSITION REWARD (0-1 total) ===
+    # Gentle preference for center, but not too strong
+    position_reward = 1.0 * jnp.exp(-0.1 * state.x**2)
 
-    # === PERFECT CONTROL BONUS (0-2 total) ===
-    # Big bonus when everything is working well together
-    both_upright = (jnp.abs(state.theta1) < 0.5) & (jnp.abs(state.theta2) < 0.5)
-    both_stable = (jnp.abs(state.theta1_dot) < 2.0) & (jnp.abs(state.theta2_dot) < 2.0)
-    perfect_bonus = jnp.where(both_upright & both_stable, 2.0, 0.0)
+    # === VELOCITY CONTROL (0-1 total) ===
+    # Reward controlled cart movement
+    velocity_reward = 1.0 * jnp.exp(-0.01 * state.x_dot**2)
 
-    # === BOUNDARY SAFETY ===
-    # Smooth penalty approaching boundaries
-    boundary_safety = jnp.where(jnp.abs(state.x) > rail_limit * 0.8, -10.0, 0.0)
+    # === PROGRESS BONUS (0-2 total) ===
+    # Bonus for achieving partial goals
+    partially_upright = (jnp.abs(state.theta1) < 1.0) & (jnp.abs(state.theta2) < 1.0)
+    well_controlled = (jnp.abs(state.theta1_dot) < 5.0) & (jnp.abs(state.theta2_dot) < 5.0)
+    progress_bonus = jnp.where(partially_upright, 1.0, 0.0) + jnp.where(well_controlled, 1.0, 0.0)
 
-    # Total reward: 0 to ~12 when perfect, with smooth gradients
+    # === BOUNDARY MANAGEMENT ===
+    # Much gentler boundary handling - gradual penalty, not cliff
+    boundary_factor = jnp.maximum(0.0, (jnp.abs(state.x) - rail_limit * 0.6) / (rail_limit * 0.4))
+    boundary_penalty = -2.0 * boundary_factor  # Max -2.0, gradual
+
+    # === ENERGY PENALTY ===
+    # Small penalty for excessive force to encourage efficiency
+    energy_penalty = -0.1 * (force / max_force) ** 2
+
+    # Total: 0 to ~11 when perfect, with smooth gradients everywhere
     total_reward = (
-        upright_reward_1
-        + upright_reward_2
-        + stability_bonus_1
-        + stability_bonus_2
-        + position_bonus
-        + perfect_bonus
-        + boundary_safety
+        upright_1
+        + upright_2
+        + stable_1
+        + stable_2
+        + position_reward
+        + velocity_reward
+        + progress_bonus
+        + boundary_penalty
+        + energy_penalty
     )
 
-    return total_reward
+    # Ensure reasonable bounds
+    return jnp.clip(total_reward, -5.0, 15.0)
 
 
 @jax.jit
