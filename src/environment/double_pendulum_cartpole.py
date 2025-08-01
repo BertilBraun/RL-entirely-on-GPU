@@ -488,7 +488,7 @@ def reward_fn(
     boundary_cost = jnp.log1p(jnp.exp(5.0 * over)) / 5.0
 
     # modest weights so typical resets aren't saturated
-    wθ, wrel, wω, wx, wxd, wu, wb = 0.9, 0.3, 0.1, 0.15, 0.03, 0.003, 0.8
+    wθ, wrel, wω, wx, wxd, wu, wb = 1.5, 0.3, 0.1, 0.15, 0.03, 0.003, 2.5
     cost = (
         wθ * upright_cost
         + wrel * rel_cost
