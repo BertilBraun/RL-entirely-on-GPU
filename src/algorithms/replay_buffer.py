@@ -40,16 +40,18 @@ class ReplayBuffer:
 
     def init_buffer_state(self) -> ReplayBufferState:
         """Initialize empty buffer state."""
+        from config import DTYPE
+
         # Initialize with zeros
         data = Transition(
-            obs=jnp.zeros((self.capacity, self.obs_dim)),
-            action=jnp.zeros((self.capacity, self.action_dim)),
-            reward=jnp.zeros((self.capacity, 1)),
-            next_obs=jnp.zeros((self.capacity, self.obs_dim)),
+            obs=jnp.zeros((self.capacity, self.obs_dim), dtype=DTYPE),
+            action=jnp.zeros((self.capacity, self.action_dim), dtype=DTYPE),
+            reward=jnp.zeros((self.capacity, 1), dtype=DTYPE),
+            next_obs=jnp.zeros((self.capacity, self.obs_dim), dtype=DTYPE),
             done=jnp.zeros((self.capacity, 1), dtype=bool),
         )
 
-        return ReplayBufferState(data=data, size=jnp.array(0), ptr=jnp.array(0))
+        return ReplayBufferState(data=data, size=jnp.array(0, dtype=jnp.int32), ptr=jnp.array(0, dtype=jnp.int32))
 
     @staticmethod
     @jax.jit
@@ -64,6 +66,8 @@ class ReplayBuffer:
         Returns:
             Updated buffer state
         """
+        from config import DTYPE
+
         batch_size = transitions.obs.shape[0]  # type: ignore
         capacity = buffer_state.data.obs.shape[0]  # type: ignore
 
@@ -71,7 +75,7 @@ class ReplayBuffer:
         idx = (jnp.arange(batch_size, dtype=jnp.int32) + buffer_state.ptr) % capacity
 
         def set_field(buf_arr, new_arr):
-            return buf_arr.at[idx].set(new_arr.reshape(batch_size, -1))
+            return buf_arr.at[idx].set(new_arr.reshape(batch_size, -1).astype(DTYPE))
 
         new_data = Transition(
             obs=set_field(buffer_state.data.obs, transitions.obs),

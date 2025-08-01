@@ -5,6 +5,8 @@ import jax.numpy as jnp
 from typing import Callable, Tuple
 
 
+DTYPE = jnp.float64
+
 # Default physical parameters for double pendulum
 DEFAULT_PARAMS = {
     'dt': 1 / 240,
@@ -93,7 +95,7 @@ def _generalized_forces(velocities: chex.Array, params: Params, force: chex.Arra
     """Q = [Fx_on_cart, τ1, τ2] with joint Rayleigh damping."""
     xd, th1d, th2d = velocities  # type: ignore
     # Cart actuation (force along x), viscous damping at joints
-    return jnp.array([force - params.x_damp * xd, -params.theta_damp1 * th1d, -params.theta_damp2 * th2d])
+    return jnp.array([force - params.x_damp * xd, -params.theta_damp1 * th1d, -params.theta_damp2 * th2d], dtype=DTYPE)
 
 
 def _accelerations_single(
@@ -137,8 +139,8 @@ def _step_single(
       v_{t+1} = v_t + dt * vdot(q_t, v_t)
       q_{t+1} = q_t + dt * v_{t+1}
     """
-    positions = jnp.array([x, theta1, theta2])
-    velocities = jnp.array([x_dot, theta1_dot, theta2_dot])
+    positions = jnp.array([x, theta1, theta2], dtype=DTYPE)
+    velocities = jnp.array([x_dot, theta1_dot, theta2_dot], dtype=DTYPE)
 
     vdot = _accelerations_single(positions, velocities, params, force)
 
@@ -218,6 +220,7 @@ def get_obs(
             state.theta2_dot / max_speed,  # Normalize second pendulum angular velocity
         ],
         axis=1,
+        dtype=DTYPE,
     )
 
 
@@ -563,7 +566,7 @@ class DoublePendulumCartPoleEnv:
 
         def rand(shape: Tuple[int, ...], lo: float, hi: float, key: chex.PRNGKey) -> chex.Array:
             key, sub_key = jax.random.split(key)
-            return jax.random.uniform(sub_key, shape, minval=lo, maxval=hi)
+            return jax.random.uniform(sub_key, shape, minval=lo, maxval=hi, dtype=DTYPE)
 
         k1, k2, k3, k4, k5, k6 = jax.random.split(reset_key, 6)
 
@@ -596,7 +599,7 @@ class DoublePendulumCartPoleEnv:
     ) -> Tuple[chex.Array, chex.Array, chex.Array, DoublePendulumCartPoleState]:
         """Step environment(s) forward."""
         # Clip action to valid range
-        action = jnp.asarray(action).reshape(self.num_envs)
+        action = jnp.asarray(action, dtype=DTYPE).reshape(self.num_envs)
         force = jnp.clip(action, -self.max_force, self.max_force)
 
         # Physics step

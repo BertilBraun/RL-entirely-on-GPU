@@ -6,6 +6,7 @@ import chex
 import jax.numpy as jnp
 import flax.linen as nn
 from typing import Tuple
+from config import DTYPE
 
 
 class CriticNetwork(nn.Module):
@@ -33,11 +34,11 @@ class CriticNetwork(nn.Module):
 
         # Hidden layers
         for hidden_dim in self.hidden_dims:
-            x = nn.Dense(hidden_dim)(x)
+            x = nn.Dense(hidden_dim, dtype=DTYPE)(x)
             x = nn.relu(x)
 
         # Output layer (single Q-value)
-        q_value = nn.Dense(1)(x)
+        q_value = nn.Dense(1, dtype=DTYPE)(x)
 
         return q_value
 
@@ -66,15 +67,7 @@ class DoubleCriticNetwork(nn.Module):
         Returns:
             Tuple of (q1_value, q2_value)
         """
-        q1 = self.critic1(obs, action, training=training)
-        q2 = self.critic2(obs, action, training=training)
+        q1 = self.critic1(obs.astype(DTYPE), action.astype(DTYPE), training=training)
+        q2 = self.critic2(obs.astype(DTYPE), action.astype(DTYPE), training=training)
 
         return q1, q2
-
-    def critic1_forward(self, obs: chex.Array, action: chex.Array, training: bool = True) -> chex.Array:
-        """Forward pass of only the first critic."""
-        return self.critic1(obs, action, training=training)
-
-    def critic2_forward(self, obs: chex.Array, action: chex.Array, training: bool = True) -> chex.Array:
-        """Forward pass of only the second critic."""
-        return self.critic2(obs, action, training=training)

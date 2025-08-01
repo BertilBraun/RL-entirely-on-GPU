@@ -123,8 +123,8 @@ class SAC:
         key_actor, key_critic, key_alpha = jax.random.split(key, 3)
 
         # Initialize network parameters
-        dummy_obs = jnp.zeros((1, self.obs_dim))
-        dummy_action = jnp.zeros((1, self.action_dim))
+        dummy_obs = jnp.zeros((1, self.obs_dim), dtype=DTYPE)
+        dummy_action = jnp.zeros((1, self.action_dim), dtype=DTYPE)
 
         actor_params = self.actor.init(key_actor, dummy_obs)
         critic_params = self.critic.init(key_critic, dummy_obs, dummy_action)
@@ -132,10 +132,10 @@ class SAC:
 
         # Initialize alpha
         if isinstance(self.config.alpha_config, AutoAlphaConfig):
-            log_alpha = jnp.array(0.0)
+            log_alpha = jnp.array(0.0, dtype=DTYPE)
             alpha = jnp.exp(log_alpha)
         else:
-            alpha = jnp.array(self.config.alpha_config.alpha)
+            alpha = jnp.array(self.config.alpha_config.alpha, dtype=DTYPE)
             log_alpha = jnp.log(alpha)
 
         # Initialize optimizers
@@ -192,7 +192,7 @@ class SAC:
         new_alpha = state.alpha
         new_log_alpha = state.log_alpha
         new_alpha_opt_state = state.alpha_opt_state
-        alpha_info = AlphaInfo(alpha_loss=jnp.array(0.0), alpha=new_alpha)
+        alpha_info = AlphaInfo(alpha_loss=jnp.array(0.0, dtype=DTYPE), alpha=new_alpha)
 
         if isinstance(self.config.alpha_config, AutoAlphaConfig) and self.alpha_optimizer is not None:
             # Get log probs for alpha update

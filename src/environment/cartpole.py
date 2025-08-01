@@ -4,6 +4,8 @@ import chex
 import jax.numpy as jnp
 from typing import Tuple
 
+from config import DTYPE
+
 
 # Default physical parameters
 DEFAULT_PARAMS = {
@@ -155,7 +157,7 @@ class CartPoleEnv:
 
         def rand(shape, lo, hi, key):
             key, sub_key = jax.random.split(key)
-            return jax.random.uniform(sub_key, shape, minval=lo, maxval=hi)
+            return jax.random.uniform(sub_key, shape, minval=lo, maxval=hi, dtype=DTYPE)
 
         key_x, key_x_dot, key_theta, key_theta_neg, key_theta_dot = jax.random.split(reset_key, 5)
 
@@ -176,7 +178,7 @@ class CartPoleEnv:
     ) -> Tuple[chex.Array, chex.Array, chex.Array, CartPoleState]:
         """Step environment(s) forward."""
         # Clip action to valid range
-        action = jnp.asarray(action).reshape(self.num_envs)
+        action = jnp.asarray(action, dtype=DTYPE).reshape(self.num_envs)
         force = jnp.clip(action, -self.max_force, self.max_force)
 
         # Physics step

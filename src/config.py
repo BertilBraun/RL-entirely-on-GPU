@@ -35,7 +35,7 @@ if USE_DOUBLE_PENDULUM:
         critic_hidden_dims=(256, 256, 256, 256),
     )
     jax.config.update('jax_enable_x64', True)
-    DTYPE = jnp.float64
+    DTYPE = jnp.float32
 else:
     SAC_CONFIG = SACConfig(
         learning_rate=3e-4,

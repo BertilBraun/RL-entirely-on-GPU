@@ -10,10 +10,10 @@ from typing import Tuple
 
 from algorithms.replay_buffer import ReplayBuffer, ReplayBufferState, Transition
 from algorithms.sac import SAC
+from config import DTYPE
 from environment.cartpole import CartPoleState
 from environment.double_pendulum_cartpole import DoublePendulumCartPoleState
 from training.data_structures import EnvType, TrainCarry, UpdateCarry, ChunkCarry, ChunkSummary
-from config import DTYPE
 
 EnvStateType = CartPoleState | DoublePendulumCartPoleState
 
@@ -64,7 +64,13 @@ class ChunkTrainer:
         )
 
         # Store transition in replay buffer
-        transition = Transition(obs=carry.train.obs, action=action, reward=reward, next_obs=next_obs, done=done)
+        transition = Transition(
+            obs=carry.train.obs.astype(DTYPE),
+            action=action.astype(DTYPE),
+            reward=reward.astype(DTYPE),
+            next_obs=next_obs.astype(DTYPE),
+            done=done.astype(DTYPE),
+        )
         buffer_state_updated = ReplayBuffer.add_batch(carry.train.buffer_state, transition)
 
         # Parameter updates
@@ -76,7 +82,7 @@ class ChunkTrainer:
             obs_after_reset,
             env_steps_after_reset,
             rewards_after_reset,
-            reward,
+            reward.astype(DTYPE),
         )
 
         return updated_carry, None
@@ -94,7 +100,7 @@ class ChunkTrainer:
         reset_obs, reset_state = self.env.reset(reset_key)
 
         next_env_steps = carry.train.env_steps + 1
-        next_episode_rewards = carry.train.episode_rewards + reward
+        next_episode_rewards = carry.train.episode_rewards + reward.astype(DTYPE)
         should_reset = done | (next_env_steps >= self.max_episode_steps)
 
         # NOTE: for some reason, [..., None] is needed just here
@@ -171,7 +177,7 @@ class ChunkTrainer:
         batch = ReplayBuffer.sample(ucc.buffer_state, sample_key, self.batch_size)
         next_sac_state, info = self.sac.update_step(ucc.sac_state, batch, update_key)
 
-        beta = jnp.asarray(self.ema_beta, DTYPE)
+        beta = jnp.asarray(self.ema_beta, dtype=DTYPE)
         return UpdateCarry(
             rng=next_rng,
             sac_state=next_sac_state,

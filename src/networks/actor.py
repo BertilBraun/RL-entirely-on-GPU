@@ -8,6 +8,8 @@ import flax.linen as nn
 from typing import Tuple
 import chex
 
+from config import DTYPE
+
 
 class ActorNetwork(nn.Module):
     """
@@ -37,12 +39,12 @@ class ActorNetwork(nn.Module):
 
         # Hidden layers
         for hidden_dim in self.hidden_dims:
-            x = nn.Dense(hidden_dim)(x)
+            x = nn.Dense(hidden_dim, dtype=DTYPE)(x)
             x = nn.relu(x)
 
         # Output layer for mean and log standard deviation
-        mu = nn.Dense(self.action_dim)(x)
-        log_std = nn.Dense(self.action_dim)(x)
+        mu = nn.Dense(self.action_dim, dtype=DTYPE)(x)
+        log_std = nn.Dense(self.action_dim, dtype=DTYPE)(x)
 
         # Clip log_std to reasonable range
         log_std = jnp.clip(log_std, self.log_std_min, self.log_std_max)
@@ -64,12 +66,11 @@ class ActorNetwork(nn.Module):
         Returns:
             Tuple of (action, log_prob)
         """
-
-        mu, log_std = self.apply(params, obs, training=training)
+        mu, log_std = self.apply(params, obs.astype(DTYPE), training=training)
         std = jnp.exp(log_std)
 
         # Reparameterization trick
-        eps = jax.random.normal(key, mu.shape)
+        eps = jax.random.normal(key, mu.shape, dtype=DTYPE)
         raw_action = mu + eps * std
 
         # Apply tanh to bound action
