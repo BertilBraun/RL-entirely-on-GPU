@@ -11,8 +11,8 @@ DTYPE = jnp.float64
 DEFAULT_PARAMS = {
     'dt': 1 / 200,
     'g': 9.81,
-    'length1': 1.2,  # First pendulum length
-    'length2': 1.0,  # Second pendulum length
+    'length1': 2.0,  # First pendulum length
+    'length2': 1.8,  # Second pendulum length
     'M': 2.0,  # Cart mass
     'm1': 0.2,  # First pendulum mass
     'm2': 0.05,  # Second pendulum mass
