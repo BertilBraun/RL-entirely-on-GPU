@@ -8,21 +8,22 @@ from typing import Callable, Tuple
 DTYPE = jnp.float64
 
 # Default physical parameters for double pendulum
+# Parameters are based on: https://github.com/openai/gym/blob/master/gym/envs/mujoco/assets/inverted_double_pendulum.xml
 DEFAULT_PARAMS = {
-    'dt': 1 / 200,
+    'dt': 0.01,
     'g': 9.81,
     'length1': 2.0,  # First pendulum length
     'length2': 1.8,  # Second pendulum length
     'M': 2.0,  # Cart mass
-    'm1': 0.2,  # First pendulum mass
-    'm2': 0.05,  # Second pendulum mass
-    'max_base_speed': 6.0,  # TODO reduce
-    'max_speed': 8.0,  # TODO reduce
-    'max_force': 50.0,  # TODO reduce
+    'm1': 0.4,  # First pendulum mass
+    'm2': 0.4,  # Second pendulum mass
+    'max_base_speed': 100.0,  # TODO reduce
+    'max_speed': 100.0,  # TODO reduce
+    'max_force': 100.0,  # TODO reduce
     'rail_limit': 10.0,  # base can move between -5 and 5
-    'x_damp': 0.02,  # Cart velocity damping
-    'theta_damp1': 0.02,  # First pole rotational damping
-    'theta_damp2': 0.02,  # Second pole rotational damping
+    'x_damp': 0.05,  # Cart velocity damping
+    'theta_damp1': 0.05,  # First pole rotational damping
+    'theta_damp2': 0.05,  # Second pole rotational damping
 }
 
 
