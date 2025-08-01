@@ -1,5 +1,5 @@
 """
-Chunk-based training logic for JAX-based SAC.
+Chunk-based training logic for JAX-based RL algorithms.
 """
 
 from functools import partial
@@ -7,24 +7,24 @@ import chex
 import jax
 import jax.numpy as jnp
 from typing import Tuple
+from abc import ABC, abstractmethod
 
-from algorithms.replay_buffer import ReplayBuffer, ReplayBufferState, Transition
-from algorithms.sac import SAC
+from algorithms.base import Algorithm
 from config import DTYPE
 from environment.cartpole import CartPoleState
 from environment.double_pendulum_cartpole import DoublePendulumCartPoleState
-from training.data_structures import EnvType, TrainCarry, UpdateCarry, ChunkCarry, ChunkSummary
+from training.data_structures import EnvType, TrainCarry, UpdateCarry, ChunkCarry, ChunkSummary, BufferStateType
 
 EnvStateType = CartPoleState | DoublePendulumCartPoleState
 
 
-class ChunkTrainer:
-    """Handles chunk-based training on GPU with better modularity."""
+class BaseChunkTrainer(ABC):
+    """Base class for algorithm-specific chunk trainers."""
 
     def __init__(
         self,
         env: EnvType,
-        sac: SAC,
+        algorithm: Algorithm,
         batch_size: int,
         updates_per_step: int,
         max_episode_steps: int,
@@ -33,7 +33,7 @@ class ChunkTrainer:
         reward_ema_beta: float = 0.01,
     ) -> None:
         self.env = env
-        self.sac = sac
+        self.algorithm = algorithm
         self.batch_size = batch_size
         self.updates_per_step = updates_per_step
         self.max_episode_steps = max_episode_steps
@@ -54,8 +54,11 @@ class ChunkTrainer:
         # Split RNG for different operations
         rng, action_key, reset_key = jax.random.split(carry.train.rng, 3)
 
-        # Environment interaction
-        action = self.sac.select_action_stochastic(carry.train.sac_state, carry.train.obs, action_key)
+        # Algorithm-specific rollout data collection
+        action, rollout_data = self.algorithm.collect_rollout_data(
+            carry.train.algorithm_state, carry.train.obs, action_key
+        )
+
         next_obs, reward, done, next_env_state = self.env.step(carry.train.env_state, action)
 
         # Handle episode termination and reset
@@ -63,15 +66,16 @@ class ChunkTrainer:
             carry, next_obs, next_env_state, reward, done, reset_key
         )
 
-        # Store transition in replay buffer
-        transition = Transition(
-            obs=carry.train.obs.astype(DTYPE),
-            action=action.astype(DTYPE),
-            reward=reward.astype(DTYPE),
-            next_obs=next_obs.astype(DTYPE),
-            done=done.astype(bool),
+        # Algorithm-specific buffer update
+        buffer_state_updated = self.algorithm.update_buffer(
+            carry.train.buffer_state,
+            rollout_data,
+            carry.train.obs,
+            action,
+            reward,
+            next_obs,
+            done,
         )
-        buffer_state_updated = ReplayBuffer.add_batch(carry.train.buffer_state, transition)
 
         # Parameter updates
         updated_carry = self._perform_parameter_updates(
@@ -132,14 +136,14 @@ class ChunkTrainer:
         self,
         rng: chex.PRNGKey,
         carry: ChunkCarry,
-        buffer_state: ReplayBufferState,
+        buffer_state: BufferStateType,
         env_state: EnvStateType,
         obs: chex.Array,
         env_steps: chex.Array,
         episode_rewards: chex.Array,
         step_reward: chex.Array,
     ) -> ChunkCarry:
-        """Perform SAC parameter updates and update EMAs."""
+        """Perform algorithm parameter updates and update EMAs."""
         # Initialize update carry
         uc0 = UpdateCarry.init(carry, rng, buffer_state)
 
@@ -154,7 +158,7 @@ class ChunkTrainer:
         return ChunkCarry(
             train=TrainCarry(
                 rng=uc_final.rng,
-                sac_state=uc_final.sac_state,
+                algorithm_state=uc_final.algorithm_state,
                 buffer_state=uc_final.buffer_state,
                 env_state=env_state,
                 obs=obs,
@@ -170,22 +174,110 @@ class ChunkTrainer:
             reward_ema=reward_ema_updated,
         )
 
+    @abstractmethod
+    def _single_update(self, ucc: UpdateCarry, _) -> Tuple[UpdateCarry, None]:
+        """Perform a single algorithm parameter update (algorithm-specific)."""
+        pass
+
+
+class SACChunkTrainer(BaseChunkTrainer):
+    """SAC-specific chunk trainer."""
+
     def _single_update(self, ucc: UpdateCarry, _) -> Tuple[UpdateCarry, None]:
         """Perform a single SAC parameter update."""
         next_rng, sample_key, update_key = jax.random.split(ucc.rng, 3)
 
-        batch = ReplayBuffer.sample(ucc.buffer_state, sample_key, self.batch_size)
-        next_sac_state, info = self.sac.update_step(ucc.sac_state, batch, update_key)
+        # SAC batch preparation and update
+        batch = self.algorithm.prepare_update_batch(ucc.buffer_state, sample_key, self.batch_size)
+        next_algorithm_state, info = self.algorithm.update_step(ucc.algorithm_state, batch, update_key)
+
+        # Extract SAC-specific metrics
+        actor_loss = info.actor_info.actor_loss
+        critic_loss = info.critic_info.q1_loss
+        alpha = info.alpha_info.alpha
+        q_mean = info.critic_info.q1_mean
 
         beta = jnp.asarray(self.ema_beta, dtype=DTYPE)
         return UpdateCarry(
             rng=next_rng,
-            sac_state=next_sac_state,
+            algorithm_state=next_algorithm_state,
             buffer_state=ucc.buffer_state,
             total_updates_done=ucc.total_updates_done + 1,
             chunk_updates_done=ucc.chunk_updates_done + 1,
-            actor_loss_ema=(1 - beta) * ucc.actor_loss_ema + beta * info.actor_info.actor_loss,
-            critic_loss_ema=(1 - beta) * ucc.critic_loss_ema + beta * info.critic_info.q1_loss,
-            alpha_ema=(1 - beta) * ucc.alpha_ema + beta * info.alpha_info.alpha,
-            q_ema=(1 - beta) * ucc.q_ema + beta * info.critic_info.q1_mean,
+            actor_loss_ema=(1 - beta) * ucc.actor_loss_ema + beta * actor_loss,
+            critic_loss_ema=(1 - beta) * ucc.critic_loss_ema + beta * critic_loss,
+            alpha_ema=(1 - beta) * ucc.alpha_ema + beta * alpha,
+            q_ema=(1 - beta) * ucc.q_ema + beta * q_mean,
         ), None
+
+
+class PPOChunkTrainer(BaseChunkTrainer):
+    """PPO-specific chunk trainer."""
+
+    def _single_update(self, ucc: UpdateCarry, _) -> Tuple[UpdateCarry, None]:
+        """Perform a single PPO parameter update."""
+        next_rng, sample_key, update_key = jax.random.split(ucc.rng, 3)
+
+        # PPO batch preparation and update
+        batch = self.algorithm.prepare_update_batch(ucc.buffer_state, sample_key, self.batch_size)
+        next_algorithm_state, info = self.algorithm.update_step(ucc.algorithm_state, batch, update_key)
+
+        # Extract PPO-specific metrics
+        actor_loss = info.policy_info.policy_loss
+        critic_loss = info.value_info.value_loss
+        alpha = jnp.array(0.0, dtype=DTYPE)  # PPO doesn't use alpha
+        q_mean = info.value_info.value_mean
+
+        beta = jnp.asarray(self.ema_beta, dtype=DTYPE)
+        return UpdateCarry(
+            rng=next_rng,
+            algorithm_state=next_algorithm_state,
+            buffer_state=ucc.buffer_state,
+            total_updates_done=ucc.total_updates_done + 1,
+            chunk_updates_done=ucc.chunk_updates_done + 1,
+            actor_loss_ema=(1 - beta) * ucc.actor_loss_ema + beta * actor_loss,
+            critic_loss_ema=(1 - beta) * ucc.critic_loss_ema + beta * critic_loss,
+            alpha_ema=(1 - beta) * ucc.alpha_ema + beta * alpha,
+            q_ema=(1 - beta) * ucc.q_ema + beta * q_mean,
+        ), None
+
+
+def create_chunk_trainer(
+    env: EnvType,
+    algorithm: Algorithm,
+    batch_size: int,
+    updates_per_step: int,
+    max_episode_steps: int,
+    steps_per_gpu_chunk: int,
+    ema_beta: float = 0.01,
+    reward_ema_beta: float = 0.01,
+) -> BaseChunkTrainer:
+    """Factory function to create the appropriate chunk trainer for the algorithm."""
+    if algorithm.algorithm_name == 'SAC':
+        return SACChunkTrainer(
+            env,
+            algorithm,
+            batch_size,
+            updates_per_step,
+            max_episode_steps,
+            steps_per_gpu_chunk,
+            ema_beta,
+            reward_ema_beta,
+        )
+    elif algorithm.algorithm_name == 'PPO':
+        return PPOChunkTrainer(
+            env,
+            algorithm,
+            batch_size,
+            updates_per_step,
+            max_episode_steps,
+            steps_per_gpu_chunk,
+            ema_beta,
+            reward_ema_beta,
+        )
+    else:
+        raise NotImplementedError(f'No chunk trainer implemented for {algorithm.algorithm_name}')
+
+
+# Legacy alias for backwards compatibility
+ChunkTrainer = BaseChunkTrainer

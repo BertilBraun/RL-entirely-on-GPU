@@ -1,7 +1,8 @@
 # src/main.py
 """
-Main script for JAX-based SAC for Cart-Pole Environment.
+Main script for JAX-based RL for Cart-Pole Environment.
 Chunked training: run N updates entirely on GPU, then log/viz on host, repeat.
+Supports both SAC and PPO algorithms.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import numpy as np
 from typing import Tuple, Optional
 
 from config import (
-    SAC_CONFIG,
+    ALGORITHM,
     NUM_ENVS,
     MAX_EPISODE_STEPS,
     TOTAL_UPDATES,
@@ -26,13 +27,14 @@ from config import (
     ENABLE_TRAINING_VIZ,
     ENABLE_LIVE_VIZ,
     USE_DOUBLE_PENDULUM,
+    create_algorithm,
 )
 from environment.cartpole import CartPoleEnv
 from environment.double_pendulum_cartpole import DoublePendulumCartPoleEnv
 from algorithms.replay_buffer import ReplayBuffer
-from algorithms.sac import SAC, SACState
+from algorithms.episode_buffer import EpisodeBuffer
 from training.data_structures import EnvType, TrainCarry, TrainingSetup
-from training.chunk_trainer import ChunkTrainer
+from training.chunk_trainer import create_chunk_trainer, BaseChunkTrainer
 from utils.cartpole_viz import CartPoleLiveVisualizer
 from utils.double_pendulum_cartpole_viz import DoublePendulumCartPoleLiveVisualizer
 from utils.training_viz import TrainingVisualizer
@@ -42,28 +44,39 @@ VisualizerType = DoublePendulumCartPoleLiveVisualizer | CartPoleLiveVisualizer
 
 
 def setup_environment_and_agent(rng: jax.Array) -> TrainingSetup:
-    """Initialize environment, agent, and replay buffer."""
+    """Initialize environment, agent, and buffer."""
     env: EnvType
     if USE_DOUBLE_PENDULUM:
         env = DoublePendulumCartPoleEnv(num_envs=NUM_ENVS)
     else:
         env = CartPoleEnv(num_envs=NUM_ENVS)
-    sac = SAC(obs_dim=env.obs_dim, action_dim=env.action_dim, max_action=env.max_force, config=SAC_CONFIG)
 
-    rng, sac_key, reset_key = jax.random.split(rng, 3)
-    sac_state = sac.init_state(sac_key)
-    sac_state = sac_state.try_load()
+    # Create algorithm using factory
+    algorithm = create_algorithm(obs_dim=env.obs_dim, action_dim=env.action_dim, max_action=env.max_force)
 
-    replay_buffer = ReplayBuffer(capacity=BUFFER_CAPACITY, obs_dim=env.obs_dim, action_dim=env.action_dim)
-    buffer_state = replay_buffer.init_buffer_state()
+    rng, alg_key, reset_key = jax.random.split(rng, 3)
+    algorithm_state = algorithm.init_state(alg_key)
+    algorithm_state = algorithm_state.try_load()
+
+    # Create appropriate buffer based on algorithm
+    if algorithm.requires_replay_buffer:
+        # SAC uses replay buffer
+        buffer = ReplayBuffer(capacity=BUFFER_CAPACITY, obs_dim=env.obs_dim, action_dim=env.action_dim)
+        buffer_state = buffer.init_buffer_state()
+    else:
+        # PPO uses episode buffer
+        buffer = EpisodeBuffer(
+            max_episode_length=MAX_EPISODE_STEPS, obs_dim=env.obs_dim, action_dim=env.action_dim, num_envs=NUM_ENVS
+        )
+        buffer_state = buffer.init_buffer_state()
 
     # Initial obs/state via functional reset
     obs0, env_state0 = env.reset(reset_key)
 
     return TrainingSetup(
         env=env,
-        sac=sac,
-        sac_state=sac_state,
+        algorithm=algorithm,
+        algorithm_state=algorithm_state,
         buffer_state=buffer_state,
         initial_obs=obs0,
         initial_env_state=env_state0,
@@ -99,13 +112,10 @@ def setup_visualizers(env: EnvType) -> Tuple[Optional[TrainingVisualizer], Optio
 def print_training_info() -> None:
     """Print training configuration."""
     env_type = 'Double Pendulum Cart-Pole' if USE_DOUBLE_PENDULUM else 'Cart-Pole'
-    print(f'🚀 Starting JAX-based SAC for {env_type} (Chunked GPU Training)')
+    print(f'🚀 Starting JAX-based {ALGORITHM} for {env_type} (Chunked GPU Training)')
     print('=' * 80)
+    print(f'Algorithm: {ALGORITHM}')
     print(f'Environment: {NUM_ENVS} {env_type.lower()}(s)')
-    print('Network:')
-    print(f'- Actor {SAC_CONFIG.actor_hidden_dims}')
-    print(f'- Critic {SAC_CONFIG.critic_hidden_dims}')
-    print(f'- LR: {SAC_CONFIG.learning_rate}')
     print(f'Updates: total={TOTAL_UPDATES}, per-step={UPDATES_PER_STEP}, per-chunk={STEPS_PER_GPU_CHUNK}')
     print(f'Max episode steps: {MAX_EPISODE_STEPS} | Batch size: {BATCH_SIZE}')
     print('=' * 80)
@@ -113,7 +123,7 @@ def print_training_info() -> None:
 
 def run_training_loop(
     train_carry: TrainCarry,
-    chunk_trainer: ChunkTrainer,
+    chunk_trainer: BaseChunkTrainer,
     training_viz: Optional[TrainingVisualizer],
     live_viz: Optional[VisualizerType],
 ) -> float:
@@ -157,12 +167,14 @@ def run_training_loop(
                 f'alpha {metrics.alpha:.3f} | q {metrics.q_values:.2f} | r {metrics.reward:.2f}'
             )
 
-            train_carry.sac_state.save_model(int(train_carry.total_updates_done))
+            train_carry.algorithm_state.save_model(int(train_carry.total_updates_done))
 
     except KeyboardInterrupt:
         print('\n⏸️  Training interrupted by user')
 
-    run_pendulums_viz(train_carry.rng, chunk_trainer.sac, train_carry.sac_state)
+    # Get algorithm reference for visualization
+    algorithm = chunk_trainer.algorithm
+    run_pendulums_viz(train_carry.rng, algorithm, train_carry.algorithm_state)
 
     return time.time() - start_time
 
@@ -193,7 +205,7 @@ def print_final_stats_and_cleanup(
         live_viz.close()
 
 
-def run_pendulums_viz(rng: chex.PRNGKey, sac: SAC, sac_state: SACState) -> None:
+def run_pendulums_viz(rng: chex.PRNGKey, algorithm, algorithm_state) -> None:
     """Run visualization of trained agent."""
     if USE_DOUBLE_PENDULUM:
         env = DoublePendulumCartPoleEnv(num_envs=4)
@@ -204,19 +216,19 @@ def run_pendulums_viz(rng: chex.PRNGKey, sac: SAC, sac_state: SACState) -> None:
             rail_limit=env.rail_limit,
             should_save=True,
         )
-        filename = 'double_pendulums_viz.gif'
+        filename = f'double_pendulums_{ALGORITHM.lower()}_viz.gif'
     else:
         env = CartPoleEnv(num_envs=4)
         live_viz = CartPoleLiveVisualizer(
             num_cartpoles=env.num_envs, length=env.length, rail_limit=env.rail_limit, should_save=True
         )
-        filename = 'pendulums_viz.gif'
+        filename = f'pendulums_{ALGORITHM.lower()}_viz.gif'
 
     obs, env_state = env.reset(rng)
 
     # run until all pendulums are done
     for step in range(1000):
-        action = sac.select_action_deterministic(sac_state, obs)
+        action = algorithm.select_action_deterministic(algorithm_state, obs)
         obs, reward, done, env_state = env.step(env_state, action)
         live_viz.update(env_state, step=step, rewards=np.array([reward]).squeeze())
         if jnp.any(done):
@@ -241,9 +253,9 @@ def main() -> None:
     train_carry = TrainCarry.init(setup)
 
     # Create chunk trainer
-    chunk_trainer = ChunkTrainer(
+    chunk_trainer = create_chunk_trainer(
         env=setup.env,
-        sac=setup.sac,
+        algorithm=setup.algorithm,
         batch_size=BATCH_SIZE,
         updates_per_step=UPDATES_PER_STEP,
         max_episode_steps=MAX_EPISODE_STEPS,

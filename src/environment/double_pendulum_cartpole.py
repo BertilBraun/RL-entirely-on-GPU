@@ -19,7 +19,7 @@ DEFAULT_PARAMS = {
     'm2': 0.4,  # Second pendulum mass
     'max_base_speed': 8.0,  # TODO reduce
     'max_speed': 8.0,  # TODO reduce
-    'max_force': 50.0,  # TODO reduce
+    'max_force': 20.0,  # TODO reduce
     'rail_limit': 10.0,  # base can move between -5 and 5
     'x_damp': 0.05,  # Cart velocity damping
     'theta_damp1': 0.05,  # First pole rotational damping
@@ -484,7 +484,7 @@ def reward_fn(
     xd_cost = huber(state.x_dot / max_base_speed)
     u_cost = 0.5 * (force / max_force) ** 2
 
-    boundary_cost = jnp.where(jnp.abs(state.x) >= rail_limit - 0.5, 10.0, 0.0)
+    boundary_cost = jnp.where(jnp.abs(state.x) >= rail_limit - 1.0, 10.0, 0.0)
 
     # modest weights so typical resets aren't saturated
     wθ, wrel, wω, wx, wxd, wu, wb = 1.5, 0.3, 0.1, 0.15, 0.03, 0.003, 2.5

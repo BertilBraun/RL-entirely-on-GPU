@@ -27,7 +27,7 @@ class DoublePendulumCartPoleLiveVisualizer(BaseLiveVisualizer):
         # Trail data for both pendulum bobs
         self.trail1_data: list[list[Point]] = [[] for _ in range(self.num_cartpoles)]
         self.trail2_data: list[list[Point]] = [[] for _ in range(self.num_cartpoles)]
-        self.max_trail_length = 20
+        self.max_trail_length = 10
 
     def update(self, state: DoublePendulumCartPoleState, step: int, rewards: np.ndarray) -> None:
         """

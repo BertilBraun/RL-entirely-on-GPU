@@ -9,9 +9,10 @@ import jax
 import jax.numpy as jnp
 import chex
 import optax
-from typing import NamedTuple, Tuple
+from typing import NamedTuple, Tuple, Any
 
 
+from algorithms.base import Algorithm, AlgorithmState, AlgorithmInfo
 from networks.actor import ActorNetwork
 from networks.critic import DoubleCriticNetwork
 from algorithms.replay_buffer import Transition
@@ -74,7 +75,7 @@ class AlphaInfo:
 
 
 @chex.dataclass
-class SACInfo:
+class SACInfo(AlgorithmInfo):
     """Info from SAC."""
 
     critic_info: CriticInfo
@@ -82,15 +83,13 @@ class SACInfo:
     alpha_info: AlphaInfo
 
 
-class SAC:
+class SAC(Algorithm):
     """
     Soft Actor-Critic algorithm implementation.
     """
 
     def __init__(self, obs_dim: int, action_dim: int, max_action: float, config: SACConfig = SACConfig()):
-        self.obs_dim = obs_dim
-        self.action_dim = action_dim
-        self.max_action = max_action
+        super().__init__(obs_dim, action_dim, max_action)
         self.config = config
 
         # Set target entropy if not provided
@@ -227,6 +226,52 @@ class SAC:
         info = SACInfo(critic_info=critic_info, actor_info=actor_info, alpha_info=alpha_info)
 
         return new_state, info
+
+    @property
+    def algorithm_name(self) -> str:
+        """Return the name of the algorithm."""
+        return 'SAC'
+
+    @property
+    def requires_replay_buffer(self) -> bool:
+        """Return True if algorithm uses replay buffer (off-policy), False if episode buffer (on-policy)."""
+        return True
+
+    @partial(jax.jit, static_argnums=0)
+    def collect_rollout_data(self, state: SACState, obs: chex.Array, key: chex.PRNGKey) -> Tuple[chex.Array, dict]:
+        """Collect SAC rollout data - just action, no additional data needed."""
+        action = self.select_action_stochastic(state, obs, key)
+        rollout_data = {}  # SAC doesn't need additional rollout data
+        return action, rollout_data
+
+    def update_buffer(
+        self,
+        buffer_state: Any,
+        rollout_data: Any,
+        obs: chex.Array,
+        action: chex.Array,
+        reward: chex.Array,
+        next_obs: chex.Array,
+        done: chex.Array,
+    ) -> Any:
+        """Update SAC replay buffer with transition."""
+        from algorithms.replay_buffer import ReplayBuffer, Transition
+        from config import DTYPE
+
+        transition = Transition(
+            obs=obs.astype(DTYPE),
+            action=action.astype(DTYPE),
+            reward=reward.astype(DTYPE),
+            next_obs=next_obs.astype(DTYPE),
+            done=done.astype(bool),
+        )
+        return ReplayBuffer.add_batch(buffer_state, transition)
+
+    def prepare_update_batch(self, buffer_state: Any, key: chex.PRNGKey, batch_size: int) -> Any:
+        """Prepare SAC training batch by sampling from replay buffer."""
+        from algorithms.replay_buffer import ReplayBuffer
+
+        return ReplayBuffer.sample(buffer_state, key, batch_size)
 
     @partial(jax.jit, static_argnums=0)
     def select_action_deterministic(self, state: SACState, obs: chex.Array) -> chex.Array:
