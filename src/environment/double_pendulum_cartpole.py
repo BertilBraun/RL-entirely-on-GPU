@@ -104,13 +104,10 @@ def _accelerations_single(
 ) -> chex.Array:
     """
     Returns vdot solving:  d/dt(∂L/∂v) - ∂L/∂q = Q  ⇒  M(q) vdot = Q + ∂L/∂q - (∂/∂q ∂L/∂v) v
-
-    Added numerical safeguards to prevent NaN propagation.
     """
-    # Clamp positions and velocities to reasonable ranges to prevent numerical issues
-    positions = jnp.clip(positions, -100.0, 100.0)
-    velocities = jnp.clip(velocities, -100.0, 100.0)
-    force = jnp.clip(force, -1000.0, 1000.0)
+    # Light bounds checking to prevent extreme values
+    positions = jnp.clip(positions, -50.0, 50.0)
+    velocities = jnp.clip(velocities, -50.0, 50.0)
 
     # Gradients
     dLdq = jax.grad(_lagrangian, argnums=0)(positions, velocities, params)  # ∂L/∂q
@@ -125,29 +122,12 @@ def _accelerations_single(
 
     rhs = Q + dLdq - C_times_v
 
-    # Add numerical safeguards for the linear solve
-    # Check if mass matrix is well-conditioned
-    det = jnp.linalg.det(Mmat)
-    condition_number = jnp.linalg.cond(Mmat)
+    # Simple regularization for numerical stability
+    Mmat_reg = Mmat + 1e-8 * jnp.eye(Mmat.shape[0])
+    vdot = jnp.linalg.solve(Mmat_reg, rhs)
 
-    # If matrix is ill-conditioned, use regularized solve
-    is_ill_conditioned = (jnp.abs(det) < 1e-10) | (condition_number > 1e12) | jnp.isnan(det)
-
-    # Regularize the mass matrix when ill-conditioned
-    regularized_Mmat = jnp.where(
-        is_ill_conditioned,
-        Mmat + 1e-6 * jnp.eye(Mmat.shape[0]),  # Add small diagonal regularization
-        Mmat,
-    )
-
-    # Solve the linear system with safeguards
-    vdot = jnp.linalg.solve(regularized_Mmat, rhs)
-
-    # Clamp accelerations to prevent explosion
-    vdot = jnp.clip(vdot, -1000.0, 1000.0)
-
-    # Replace any NaNs with zeros
-    vdot = jnp.where(jnp.isnan(vdot), 0.0, vdot)
+    # Light bounds on output
+    vdot = jnp.clip(vdot, -100.0, 100.0)
 
     return vdot
 
@@ -170,15 +150,7 @@ def _step_single(
     Semi-implicit (symplectic) Euler:
       v_{t+1} = v_t + dt * vdot(q_t, v_t)
       q_{t+1} = q_t + dt * v_{t+1}
-
-    Added numerical safeguards to prevent NaN propagation.
     """
-    # Clamp inputs to prevent numerical issues
-    x = jnp.clip(x, -50.0, 50.0)
-    x_dot = jnp.clip(x_dot, -100.0, 100.0)
-    theta1_dot = jnp.clip(theta1_dot, -100.0, 100.0)
-    theta2_dot = jnp.clip(theta2_dot, -100.0, 100.0)
-
     positions = jnp.array([x, theta1, theta2], dtype=DTYPE)
     velocities = jnp.array([x_dot, theta1_dot, theta2_dot], dtype=DTYPE)
 
@@ -187,24 +159,8 @@ def _step_single(
     velocities_new = velocities + params.dt * vdot
     positions_new = positions + params.dt * velocities_new
 
-    # Clamp the new values to prevent explosion
-    velocities_new = jnp.clip(velocities_new, -100.0, 100.0)
-    positions_new = jnp.array(
-        [
-            jnp.clip(positions_new[0], -50.0, 50.0),  # x position
-            positions_new[1],  # theta1 (don't clamp angles)
-            positions_new[2],  # theta2 (don't clamp angles)
-        ]
-    )
-
     x_new, th1_new, th2_new = positions_new
     xd_new, th1d_new, th2d_new = velocities_new
-
-    # Replace any NaNs with safe values
-    x_new = jnp.where(jnp.isnan(x_new), 0.0, x_new)
-    xd_new = jnp.where(jnp.isnan(xd_new), 0.0, xd_new)
-    th1d_new = jnp.where(jnp.isnan(th1d_new), 0.0, th1d_new)
-    th2d_new = jnp.where(jnp.isnan(th2d_new), 0.0, th2d_new)
 
     return DoublePendulumCartPoleState(
         x=x_new,
@@ -296,44 +252,31 @@ def reward_fn(
     - Positive rewards (0-10 range) instead of negative penalties
     - Dense feedback with exponential rewards for uprightness
     - Bonus rewards for achieving multiple goals together
-    - Added NaN safeguards
     """
-
-    # Add NaN safeguards for all inputs
-    x = jnp.where(jnp.isnan(state.x), 0.0, state.x)
-    theta1 = jnp.where(jnp.isnan(state.theta1), 0.0, state.theta1)
-    theta2 = jnp.where(jnp.isnan(state.theta2), 0.0, state.theta2)
-    theta1_dot = jnp.where(jnp.isnan(state.theta1_dot), 0.0, state.theta1_dot)
-    theta2_dot = jnp.where(jnp.isnan(state.theta2_dot), 0.0, state.theta2_dot)
-
-    # Clamp values to reasonable ranges
-    x = jnp.clip(x, -rail_limit, rail_limit)
-    theta1_dot = jnp.clip(theta1_dot, -100.0, 100.0)
-    theta2_dot = jnp.clip(theta2_dot, -100.0, 100.0)
 
     # === PRIMARY OBJECTIVE: UPRIGHTNESS (0-6 total) ===
     # Strong exponential rewards for each pendulum being upright
-    upright_reward_1 = 3.0 * jnp.exp(-2.0 * theta1**2)
-    upright_reward_2 = 3.0 * jnp.exp(-2.0 * theta2**2)
+    upright_reward_1 = 3.0 * jnp.exp(-2.0 * state.theta1**2)
+    upright_reward_2 = 3.0 * jnp.exp(-2.0 * state.theta2**2)
 
     # === STABILITY BONUS (0-2 total) ===
     # Reward stable, controlled movement
-    stability_bonus_1 = 1.0 * jnp.exp(-0.1 * theta1_dot**2)
-    stability_bonus_2 = 1.0 * jnp.exp(-0.1 * theta2_dot**2)
+    stability_bonus_1 = 1.0 * jnp.exp(-0.1 * state.theta1_dot**2)
+    stability_bonus_2 = 1.0 * jnp.exp(-0.1 * state.theta2_dot**2)
 
     # === POSITION CONTROL (0-1 total) ===
     # Gentle reward for keeping cart centered
-    position_bonus = 1.0 * jnp.exp(-0.25 * x**2)
+    position_bonus = 1.0 * jnp.exp(-0.25 * state.x**2)
 
     # === PERFECT CONTROL BONUS (0-2 total) ===
     # Big bonus when everything is working well together
-    both_upright = (jnp.abs(theta1) < 0.5) & (jnp.abs(theta2) < 0.5)
-    both_stable = (jnp.abs(theta1_dot) < 2.0) & (jnp.abs(theta2_dot) < 2.0)
+    both_upright = (jnp.abs(state.theta1) < 0.5) & (jnp.abs(state.theta2) < 0.5)
+    both_stable = (jnp.abs(state.theta1_dot) < 2.0) & (jnp.abs(state.theta2_dot) < 2.0)
     perfect_bonus = jnp.where(both_upright & both_stable, 2.0, 0.0)
 
     # === BOUNDARY SAFETY ===
     # Smooth penalty approaching boundaries
-    boundary_safety = jnp.where(jnp.abs(x) > rail_limit * 0.8, -10.0, 0.0)
+    boundary_safety = jnp.where(jnp.abs(state.x) > rail_limit * 0.8, -10.0, 0.0)
 
     # Total reward: 0 to ~12 when perfect, with smooth gradients
     total_reward = (
@@ -345,9 +288,6 @@ def reward_fn(
         + perfect_bonus
         + boundary_safety
     )
-
-    # Final NaN safeguard
-    total_reward = jnp.where(jnp.isnan(total_reward), 0.0, total_reward)
 
     return total_reward
 
