@@ -4,22 +4,25 @@ import chex
 import jax.numpy as jnp
 from typing import Callable, Tuple
 
+jax.config.update('jax_enable_x64', True)
+
 
 # Default physical parameters for double pendulum
 DEFAULT_PARAMS = {
-    'dt': 1 / 120,
+    'dt': 1 / 240,
     'g': 9.81,
-    'length1': 1.0,  # First pendulum length
+    'length1': 1.2,  # First pendulum length
     'length2': 1.0,  # Second pendulum length
-    'm1': 0.1,  # First pendulum mass
-    'm2': 0.01,  # Second pendulum mass
-    'M': 1.0,  # Cart mass
-    'max_speed': 10.0,  # TODO reduce
-    'max_base_speed': 10.0,  # TODO reduce
-    'max_force': 100.0,  # TODO reduce
+    'M': 2.0,  # Cart mass
+    'm1': 0.2,  # First pendulum mass
+    'm2': 0.05,  # Second pendulum mass
+    'max_base_speed': 6.0,  # TODO reduce
+    'max_speed': 8.0,  # TODO reduce
+    'max_force': 50.0,  # TODO reduce
     'rail_limit': 5.0,  # base can move between -5 and 5
-    'theta_damp1': 0.00,  # First pole rotational damping
-    'theta_damp2': 0.00,  # Second pole rotational damping
+    'x_damp': 0.02,  # Cart velocity damping
+    'theta_damp1': 0.02,  # First pole rotational damping
+    'theta_damp2': 0.02,  # Second pole rotational damping
 }
 
 
@@ -49,6 +52,7 @@ class Params:
     m1: float
     m2: float
     M: float
+    x_damp: float
     theta_damp1: float
     theta_damp2: float
 
@@ -91,7 +95,7 @@ def _generalized_forces(velocities: chex.Array, params: Params, force: chex.Arra
     """Q = [Fx_on_cart, τ1, τ2] with joint Rayleigh damping."""
     xd, th1d, th2d = velocities  # type: ignore
     # Cart actuation (force along x), viscous damping at joints
-    return jnp.array([force, -params.theta_damp1 * th1d, -params.theta_damp2 * th2d])
+    return jnp.array([force - params.x_damp * xd, -params.theta_damp1 * th1d, -params.theta_damp2 * th2d])
 
 
 def _accelerations_single(
@@ -401,7 +405,7 @@ def reward_fn_old_2(
 
 
 @jax.jit
-def reward_fn(
+def reward_fn_old_3(
     state: DoublePendulumCartPoleState,
     force: chex.Array,
     rail_limit: float,
@@ -453,6 +457,49 @@ def reward_fn(
     # Soft squash instead of hard clip; keeps gradients when cost is big
     r = -10.0 * jnp.tanh(cost / 10.0)  # ∈ (-10, 0)
     return r
+
+
+@jax.jit
+def reward_fn(
+    state: DoublePendulumCartPoleState,
+    force: chex.Array,
+    rail_limit: float,
+    max_base_speed: float = 6.0,
+    max_speed: float = 8.0,
+    max_force: float = 50.0,
+) -> chex.Array:
+    def huber(x, k=2.0):
+        ax = jnp.abs(x)
+        return jnp.where(ax <= k, 0.5 * (x / k) ** 2, ax / k - 0.5)
+
+    th1 = _wrap_angle(state.theta1)
+    th2 = _wrap_angle(state.theta2)
+
+    upright_cost = (1 - jnp.cos(th1)) + (1 - jnp.cos(th2))  # [0,4]
+    rel_cost = 0.5 * (1 - jnp.cos(th1 - th2))  # [0,1]
+    angv_cost = huber(state.theta1_dot / max_speed) + huber(state.theta2_dot / max_speed)
+    x_cost = huber(state.x / rail_limit)
+    xd_cost = huber(state.x_dot / max_base_speed)
+    u_cost = 0.5 * (force / max_force) ** 2
+
+    margin = 0.6
+    over = jnp.maximum(jnp.abs(state.x) - (rail_limit - margin), 0.0) / margin
+    boundary_cost = jnp.log1p(jnp.exp(5.0 * over)) / 5.0
+
+    # modest weights so typical resets aren't saturated
+    wθ, wrel, wω, wx, wxd, wu, wb = 0.9, 0.3, 0.1, 0.15, 0.03, 0.003, 0.8
+    cost = (
+        wθ * upright_cost
+        + wrel * rel_cost
+        + wω * angv_cost
+        + wx * x_cost
+        + wxd * xd_cost
+        + wu * u_cost
+        + wb * boundary_cost
+    )
+
+    # soft squash keeps gradients at large cost, but bounds scale
+    return -5.0 * jnp.tanh(cost / 5.0)
 
 
 @jax.jit
@@ -525,11 +572,11 @@ class DoublePendulumCartPoleEnv:
         x_dot = rand((self.num_envs,), -0.5, 0.5, k2)
 
         # Initialize first pendulum (hanging down to slightly off vertical)
-        theta1 = rand((self.num_envs,), -jnp.pi / 2, jnp.pi / 2, k3)
+        theta1 = rand((self.num_envs,), -jnp.pi / 4, jnp.pi / 4, k3)
         theta1_dot = rand((self.num_envs,), -0.5, 0.5, k4)
 
         # Initialize second pendulum (hanging down to slightly off vertical)
-        theta2 = rand((self.num_envs,), -jnp.pi / 2, jnp.pi / 2, k5)
+        theta2 = rand((self.num_envs,), -jnp.pi / 4, jnp.pi / 4, k5)
         theta2_dot = rand((self.num_envs,), -0.5, 0.5, k6)
 
         state = DoublePendulumCartPoleState(
