@@ -259,7 +259,7 @@ def reward_fn_old(
 
 
 @jax.jit
-def reward_fn(
+def reward_fn_old_1(
     state: DoublePendulumCartPoleState,
     force: chex.Array,
     length1: float,
@@ -333,6 +333,71 @@ def reward_fn(
     r = -total_cost
     r = jnp.clip(r, -5.0, 0.0)
     return r
+
+
+@jax.jit
+def reward_fn(
+    state: DoublePendulumCartPoleState,
+    force: chex.Array,
+    rail_limit: float,
+    max_base_speed: float = 10.0,
+    max_speed: float = 10.0,
+    max_force: float = 100.0,
+) -> chex.Array:
+    """Bounded reward in [-5, 0]; best is 0. Uses NEXT state to avoid action-spike exploits."""
+
+    # --- helpers ---
+    def huber(x, k=1.0):
+        ax = jnp.abs(x)
+        return jnp.where(ax <= k, 0.5 * (x / k) ** 2, ax / k - 0.5)
+
+    th1 = _wrap_angle(state.theta1)
+    th2 = _wrap_angle(state.theta2)
+
+    # Uprightness (bounded 0..2 per link)
+    upright_cost = (1 - jnp.cos(th1)) + (1 - jnp.cos(th2))
+
+    # Keep both links aligned around upright (penalize relative hinge motion)
+    relative_cost = 0.5 * (1 - jnp.cos(th1 - th2))  # 0 when aligned
+
+    # Angular velocity (normalized + Huber)
+    th1d = huber(state.theta1_dot / max_speed, k=1.0)
+    th2d = huber(state.theta2_dot / max_speed, k=1.0)
+    ang_vel_cost = th1d + th2d
+
+    # Cart position/velocity (normalized + Huber)
+    x_cost = huber(state.x / rail_limit, k=1.0)
+    xd_cost = huber(state.x_dot / max_base_speed, k=1.0)
+
+    # Control (normalized)
+    u_cost = 0.5 * (force / max_force) ** 2
+
+    # Smooth rail barrier (activates in last 0.4 m)
+    margin = 0.4
+    over = jnp.maximum(jnp.abs(state.x) - (rail_limit - margin), 0.0) / margin
+    boundary_cost = jnp.log1p(jnp.exp(8.0 * over)) / 8.0
+
+    # Weights
+    w_upright = 1.8
+    w_rel = 0.6
+    w_angv = 0.2
+    w_x = 0.1
+    w_xd = 0.05
+    w_u = 0.005
+    w_bound = 1.5
+
+    cost = (
+        w_upright * upright_cost
+        + w_rel * relative_cost
+        + w_angv * ang_vel_cost
+        + w_x * x_cost
+        + w_xd * xd_cost
+        + w_u * u_cost
+        + w_bound * boundary_cost
+    )
+
+    r = -cost
+    return jnp.clip(r, -5.0, 0.0)
 
 
 @jax.jit
@@ -449,7 +514,9 @@ class DoublePendulumCartPoleEnv:
         done = is_done(next_state, self.rail_limit)
 
         # Reward & outputs
-        reward = reward_fn(state, force, self.params.length1, self.params.length2, self.rail_limit)
+        reward = reward_fn(
+            next_state, force, self.params.length1, self.params.length2, self.rail_limit
+        )  # TODO use state instead of next_state
         next_obs = get_obs(next_state, self.rail_limit, self.max_base_speed, self.max_speed)
 
         return next_obs, reward, done, next_state
