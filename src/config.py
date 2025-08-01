@@ -27,7 +27,7 @@ if USE_DOUBLE_PENDULUM:
     UPDATES_PER_STEP = 4  # TODO
     SAC_CONFIG = SACConfig(
         learning_rate=3e-4,
-        gamma=0.999,
+        gamma=0.99,
         tau=0.005,
         grad_clip=5.0,
         target_entropy=-1.5,
@@ -40,7 +40,7 @@ if USE_DOUBLE_PENDULUM:
 else:
     SAC_CONFIG = SACConfig(
         learning_rate=3e-4,
-        gamma=0.995,
+        gamma=0.99,
         tau=0.003,
         grad_clip=5.0,
         target_entropy=None,
