@@ -336,7 +336,7 @@ def reward_fn_old_1(
 
 
 @jax.jit
-def reward_fn(
+def reward_fn_old_2(
     state: DoublePendulumCartPoleState,
     force: chex.Array,
     rail_limit: float,
@@ -398,6 +398,61 @@ def reward_fn(
 
     r = -cost
     return jnp.clip(r, -5.0, 0.0)
+
+
+@jax.jit
+def reward_fn(
+    state: DoublePendulumCartPoleState,
+    force: chex.Array,
+    rail_limit: float,
+    max_base_speed: float = 10.0,
+    max_speed: float = 10.0,
+    max_force: float = 100.0,
+) -> chex.Array:
+    def huber(x, k=2.0):  # wider k so typical resets aren’t penalized too hard
+        ax = jnp.abs(x)
+        return jnp.where(ax <= k, 0.5 * (x / k) ** 2, ax / k - 0.5)
+
+    th1 = _wrap_angle(state.theta1)
+    th2 = _wrap_angle(state.theta2)
+
+    upright_cost = (1 - jnp.cos(th1)) + (1 - jnp.cos(th2))  # ∈ [0, 4]
+    relative_cost = 0.5 * (1 - jnp.cos(th1 - th2))  # ∈ [0, 1]
+
+    ang_vel_cost = huber(state.theta1_dot / max_speed) + huber(state.theta2_dot / max_speed)
+
+    x_cost = huber(state.x / rail_limit)
+    xd_cost = huber(state.x_dot / max_base_speed)
+
+    u_cost = 0.5 * (force / max_force) ** 2
+
+    # gentler barrier; activates in last 0.6 m
+    margin = 0.6
+    over = jnp.maximum(jnp.abs(state.x) - (rail_limit - margin), 0.0) / margin
+    boundary_cost = jnp.log1p(jnp.exp(5.0 * over)) / 5.0
+
+    # ↓ scales reduced ~×0.5 from previous suggestion
+    w_upright = 0.9
+    w_rel = 0.3
+    w_angv = 0.1
+    w_x = 0.15
+    w_xd = 0.03
+    w_u = 0.003
+    w_bound = 0.8
+
+    cost = (
+        w_upright * upright_cost
+        + w_rel * relative_cost
+        + w_angv * ang_vel_cost
+        + w_x * x_cost
+        + w_xd * xd_cost
+        + w_u * u_cost
+        + w_bound * boundary_cost
+    )
+
+    # Soft squash instead of hard clip; keeps gradients when cost is big
+    r = -10.0 * jnp.tanh(cost / 10.0)  # ∈ (-10, 0)
+    return r
 
 
 @jax.jit
@@ -470,11 +525,11 @@ class DoublePendulumCartPoleEnv:
         x_dot = rand((self.num_envs,), -0.5, 0.5, k2)
 
         # Initialize first pendulum (hanging down to slightly off vertical)
-        theta1 = rand((self.num_envs,), -jnp.pi, jnp.pi, k3)
+        theta1 = rand((self.num_envs,), -jnp.pi / 2, jnp.pi / 2, k3)
         theta1_dot = rand((self.num_envs,), -0.5, 0.5, k4)
 
         # Initialize second pendulum (hanging down to slightly off vertical)
-        theta2 = rand((self.num_envs,), -jnp.pi, jnp.pi, k5)
+        theta2 = rand((self.num_envs,), -jnp.pi / 2, jnp.pi / 2, k5)
         theta2_dot = rand((self.num_envs,), -0.5, 0.5, k6)
 
         state = DoublePendulumCartPoleState(
