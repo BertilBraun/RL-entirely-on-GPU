@@ -19,7 +19,7 @@ DEFAULT_PARAMS = {
     'max_base_speed': 6.0,  # TODO reduce
     'max_speed': 8.0,  # TODO reduce
     'max_force': 50.0,  # TODO reduce
-    'rail_limit': 5.0,  # base can move between -5 and 5
+    'rail_limit': 10.0,  # base can move between -5 and 5
     'x_damp': 0.02,  # Cart velocity damping
     'theta_damp1': 0.02,  # First pole rotational damping
     'theta_damp2': 0.02,  # Second pole rotational damping
@@ -575,11 +575,11 @@ class DoublePendulumCartPoleEnv:
         x_dot = rand((self.num_envs,), -0.5, 0.5, k2)
 
         # Initialize first pendulum (hanging down to slightly off vertical)
-        theta1 = rand((self.num_envs,), -jnp.pi / 4, jnp.pi / 4, k3)
+        theta1 = rand((self.num_envs,), -jnp.pi, jnp.pi, k3)
         theta1_dot = rand((self.num_envs,), -0.5, 0.5, k4)
 
         # Initialize second pendulum (hanging down to slightly off vertical)
-        theta2 = rand((self.num_envs,), -jnp.pi / 4, jnp.pi / 4, k5)
+        theta2 = rand((self.num_envs,), -jnp.pi, jnp.pi, k5)
         theta2_dot = rand((self.num_envs,), -0.5, 0.5, k6)
 
         state = DoublePendulumCartPoleState(
