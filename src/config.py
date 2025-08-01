@@ -18,21 +18,22 @@ MAX_EPISODE_STEPS = 1000 if not USE_DOUBLE_PENDULUM else 4000
 TOTAL_UPDATES = 200_000 if not USE_DOUBLE_PENDULUM else 2_000_000
 BUFFER_CAPACITY = 1_000_000
 BATCH_SIZE = 1024
-UPDATES_PER_STEP = NUM_ENVS // 64  # network updates per env step
+UPDATES_PER_STEP = NUM_ENVS // 32  # network updates per env step
 NETWORK_UPDATES_PER_GPU_CHUNK = 1000  # updates per GPU-only chunk
 STEPS_PER_GPU_CHUNK = (NETWORK_UPDATES_PER_GPU_CHUNK + UPDATES_PER_STEP - 1) // UPDATES_PER_STEP
 EMA_BETA = 0.01  # smoothing for meters
 
 if USE_DOUBLE_PENDULUM:
+    UPDATES_PER_STEP = 4  # TODO
     SAC_CONFIG = SACConfig(
         learning_rate=3e-4,
-        gamma=0.995,
+        gamma=0.999,
         tau=0.005,
-        grad_clip=10.0,
+        grad_clip=5.0,
         target_entropy=-1.5,
         alpha_config=AutoAlphaConfig(min_alpha=0.005),
-        actor_hidden_dims=(256, 256, 256),
-        critic_hidden_dims=(256, 256, 256, 256),
+        actor_hidden_dims=(64, 64, 64),
+        critic_hidden_dims=(64, 64, 64, 64),
     )
     jax.config.update('jax_enable_x64', True)
     DTYPE = jnp.float32
@@ -41,7 +42,7 @@ else:
         learning_rate=3e-4,
         gamma=0.995,
         tau=0.003,
-        grad_clip=10.0,
+        grad_clip=5.0,
         target_entropy=None,
         alpha_config=AutoAlphaConfig(min_alpha=0.03),
         actor_hidden_dims=(32, 32),

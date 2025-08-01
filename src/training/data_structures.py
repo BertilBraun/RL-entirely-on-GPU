@@ -50,12 +50,19 @@ class ManualAlphaConfig(NamedTuple):
 class SACConfig(NamedTuple):
     """Configuration for SAC algorithm."""
 
+    # Learning rate for actor and critic networks
     learning_rate: float = 3e-4
+    # Discount factor for future rewards
     gamma: float = 0.99
+    # Soft update factor for target networks (how much of the new target network is mixed into the current target network)
     tau: float = 0.005
+    # Gradient clipping for actor and critic networks
     grad_clip: float = 10.0
+    # Configuration for alpha (temperature parameter for entropy regularization)
     alpha_config: AutoAlphaConfig | ManualAlphaConfig = AutoAlphaConfig()
+    # Target entropy for automatic alpha tuning (None for -action_dim)
     target_entropy: float | None = None
+    # Hidden dimensions for actor and critic networks
     actor_hidden_dims: Tuple[int, ...] = (32, 32)
     critic_hidden_dims: Tuple[int, ...] = (32, 32)
 
