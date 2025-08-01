@@ -4,8 +4,6 @@ import chex
 import jax.numpy as jnp
 from typing import Tuple
 
-from config import DTYPE
-
 
 # Default physical parameters
 DEFAULT_PARAMS = {
@@ -154,6 +152,7 @@ class CartPoleEnv:
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, reset_key: chex.PRNGKey) -> Tuple[chex.Array, CartPoleState]:
         """Reset environment(s) to initial state."""
+        from config import DTYPE
 
         def rand(shape, lo, hi, key):
             key, sub_key = jax.random.split(key)
@@ -177,6 +176,8 @@ class CartPoleEnv:
         self, state: CartPoleState, action: chex.Array
     ) -> Tuple[chex.Array, chex.Array, chex.Array, CartPoleState]:
         """Step environment(s) forward."""
+        from config import DTYPE
+
         # Clip action to valid range
         action = jnp.asarray(action, dtype=DTYPE).reshape(self.num_envs)
         force = jnp.clip(action, -self.max_force, self.max_force)
